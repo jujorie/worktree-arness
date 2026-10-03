@@ -1,10 +1,12 @@
 ---
 name: worktree-create
-description: Create a git worktree from a repo cloned in this arness workspace's source/ folder. Use when the user asks to create a worktree (for a feature, fix or task) from a source repo. Fails with NO_SOURCE or NO_NAME when the repo or the worktree name is missing.
+description: Create a git worktree and its branch for a task from a repo in source/, then apply config/<repo>/ to it. Use whenever the user asks to create, open or start a worktree or working branch, e.g. "crea un worktree", "nuevo worktree para X". Always use this skill, never `git worktree add` or its script directly. Fails with NO_SOURCE or NO_NAME.
 allowed-tools: Bash(skills/worktree-create/scripts/worktree-create.sh *)
 ---
 
 # worktree-create
+
+> Use this skill; do not run `git worktree add` or the script on your own. The procedure below decides what to ask and when to stop.
 
 Creates `worktrees/<repo>/<name>` with a new branch `<name>`. `<name>` may contain `/` (e.g. `feat/PROJ-123` → `worktrees/<repo>/feat/PROJ-123`); each part must be a valid file name, taken from a repo in `source/`.
 All validation and creation is done by `scripts/worktree-create.sh` (in this skill's folder). Do not run `git worktree` yourself.

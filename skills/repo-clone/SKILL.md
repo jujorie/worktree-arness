@@ -1,10 +1,12 @@
 ---
 name: repo-clone
-description: Clone a git repository into this arness workspace's source/ folder. Use when the user asks to clone, download or fetch a repo and gives its URL (https, ssh or git@ form). Handles validation and the case where the repo already exists in source/.
+description: Clone a git repository into this workspace's source/ folder. Use whenever the user asks to clone, download, fetch or get a repo from a URL (https, ssh, git@), e.g. "clona el repo", "baja el repositorio". Always use this skill, never `git clone` or its script directly.
 allowed-tools: Bash(skills/repo-clone/scripts/repo-clone.sh *)
 ---
 
 # repo-clone
+
+> Use this skill; do not run `git clone` or the script on your own. The procedure below decides what to ask and when to stop.
 
 Clones a repository into `source/<name>` at the root of this repo. Always `source/`; never clone elsewhere.
 All validation and cloning is done by `scripts/repo-clone.sh` (in this skill's folder). Do not run `git clone` yourself.
