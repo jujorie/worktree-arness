@@ -12,6 +12,8 @@ Thanks for helping. This repo is small and its rules are strict on purpose: it h
 
 `main` is protected by a branch ruleset: pull request required, code-owner review (`.github/CODEOWNERS`), required CI checks, no force-push, no deletion.
 
+Changes under `.github/` (CI workflows, `CODEOWNERS`) are reviewed and merged by the owner only. A pull request that weakens the checks will not be merged.
+
 ## Setup
 
 Install `bats-core` and `shellcheck`, then run the whole suite before every PR:

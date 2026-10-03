@@ -1,2 +1,5 @@
-# Every change needs the owner's review (enforced by the branch ruleset on main).
+# Every change needs the owner's review (enforced by the code-owner rule in the main ruleset).
 * @jujorie
+
+# CI and repo automation. Explicit so it keeps the owner even if the rule above changes.
+/.github/ @jujorie
