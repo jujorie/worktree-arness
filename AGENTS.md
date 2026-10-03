@@ -7,6 +7,7 @@ Shared agent configuration (skills, agents, instructions) used with Claude Code,
 - Shared content is authored at the repo root: `skills/`, `agents/`, `AGENTS.md`. Never edit generated files (`.claude/`, `.agents/`, `CLAUDE.md`, `opencode.json` copies); edit the sources in `providers/*/` and re-run `./setup.sh --provider <name>`.
 - Shell scripts must run on macOS (bash 3.2) and Linux/WSL: no GNU-only flags (`sed -i`, `readlink -f`, `mapfile`). Run `./scripts/test.sh` after changing them.
 - Skills: each lives in `skills/<name>/` with `SKILL.md`, its scripts in `skills/<name>/scripts/` and bats tests in `skills/<name>/tests/`. To clone a repo, use the `repo-clone` skill.
+- Follow `CODESTYLE.md` for naming and conventions and `CONTRIBUTING.md` for branches, commits and pull requests. Never push to `main`; work on a branch.
 - Workspace folders (git-ignored, each has a README with its usage): `source/` repo clones (`repo-clone`), `worktrees/<repo>/<name>` one per task (`worktree-create`, `worktree-config`, `worktree-clean`), `config/<repo>/` local files copied into each new worktree. Work in a worktree, not in `source/`. Read the folder's README before using it.
 
 ## Memory
