@@ -1,10 +1,12 @@
 ---
 name: worktree-config
-description: Copy the local files in this arness workspace's config/<repo>/ into an existing worktree and run config/<repo>/install.sh in it. Use when the user asks to configure, set up or re-apply the config of a worktree given as <repo>/<name>. worktree-create already runs it on new worktrees.
+description: Apply config/<repo>/ to an existing worktree: copy its files and run install.sh there. Use whenever the user asks to configure, set up, prepare or re-apply the config of a worktree <repo>/<name>, e.g. "configura el worktree", "prepara el worktree", "instala dependencias". Always use this skill, never its script directly. worktree-create already runs it.
 allowed-tools: Bash(skills/worktree-config/scripts/worktree-config.sh *)
 ---
 
 # worktree-config
+
+> Use this skill; do not run the script on your own. The procedure below decides what to ask and when to stop.
 
 Applies `config/<repo>/` to `worktrees/<repo>/<name>`.
 All validation, copying and execution is done by `scripts/worktree-config.sh` (in this skill's folder). Do not copy files or run `install.sh` yourself.

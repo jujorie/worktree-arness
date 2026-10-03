@@ -1,10 +1,12 @@
 ---
 name: worktree-clean
-description: List the worktrees in this arness workspace's worktrees/ folder with their merge status and remove the ones the user picks. Use when the user asks to clean, list, prune or delete worktrees, or to remove the ones already merged.
+description: List worktrees with their merge status and remove the ones the user picks. Use whenever the user asks to clean, list, prune or delete worktrees, e.g. "limpia los worktrees", "borra el worktree", "qué worktrees hay". Always use this skill, never `git worktree remove` or its script directly.
 allowed-tools: Bash(skills/worktree-clean/scripts/worktree-clean.sh *)
 ---
 
 # worktree-clean
+
+> Use this skill; do not run `git worktree remove`, `git branch -d` or the script on your own. The procedure below decides what to ask and when to stop.
 
 Lists `worktrees/<repo>/<name>` and removes the chosen ones (worktree + its branch) with git.
 All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run `git worktree remove` or `git branch -d` yourself.
