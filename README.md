@@ -65,6 +65,10 @@ sudo apt install bats shellcheck             # Ubuntu / WSL
 CI runs the same suite on Ubuntu and macOS (`.github/workflows/test.yml`).
 Scripts must stay portable: bash 3.2 (macOS default) compatible, no GNU-only flags (`sed -i`, `readlink -f`, `mapfile`...). The tests check this.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, branch and commit names, and [CODESTYLE.md](CODESTYLE.md) for the code conventions. `main` is protected: changes go through a pull request.
+
 ## License
 
 [MIT](LICENSE)
