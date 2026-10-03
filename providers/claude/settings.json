@@ -1,0 +1,20 @@
+{
+  "autoMemoryEnabled": true,
+  "autoMemoryDirectory": "{{$ARNESS_ROOT}}/.memory",
+  "permissions": {
+    "allow": [
+      "Skill(repo-clone)",
+      "Skill(worktree-create)",
+      "Skill(worktree-clean)",
+      "Skill(worktree-config)",
+      "Bash(skills/repo-clone/scripts/repo-clone.sh *)",
+      "Bash({{$ARNESS_ROOT}}/skills/repo-clone/scripts/repo-clone.sh *)",
+      "Bash(skills/worktree-create/scripts/worktree-create.sh *)",
+      "Bash({{$ARNESS_ROOT}}/skills/worktree-create/scripts/worktree-create.sh *)",
+      "Bash(skills/worktree-clean/scripts/worktree-clean.sh *)",
+      "Bash({{$ARNESS_ROOT}}/skills/worktree-clean/scripts/worktree-clean.sh *)",
+      "Bash(skills/worktree-config/scripts/worktree-config.sh *)",
+      "Bash({{$ARNESS_ROOT}}/skills/worktree-config/scripts/worktree-config.sh *)"
+    ]
+  }
+}

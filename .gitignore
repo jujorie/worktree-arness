@@ -1,0 +1,12 @@
+#
+#   Workspace
+#
+.claude/
+.memory/
+/CLAUDE.md
+.agents/
+.opencode/
+.codex/
+*.bak
+/opencode.json
+/tmp/

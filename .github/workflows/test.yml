@@ -1,0 +1,21 @@
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools (ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck
+      - name: Install tools (macos)
+        if: runner.os == 'macOS'
+        run: brew install bats-core shellcheck
+      - run: ./scripts/test.sh
