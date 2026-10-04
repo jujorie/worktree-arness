@@ -18,7 +18,7 @@ cp -R ~/my-skills/foo skills/local-foo
 ln -s ~/src/my-skills/foo skills/local-foo
 ```
 
-- The folder must start with `local-`. Name the skill the same way (`name: local-foo` in its `SKILL.md`) so it is easy to tell apart.
+- The folder must start with `local-`, and `name` in its `SKILL.md` must be **exactly the folder name** (`name: local-foo`), in lowercase letters, digits and single hyphens. This is a requirement, not a style choice: OpenCode requires `name` to match the directory, while Claude Code would accept a different `name` (and then invoke the skill by it). Matching names work in all three providers.
 - Repo checks skip `local-*` skills: they need no permission entries in `providers/`, and their scripts are not linted by the suite.
 - To stop agents asking before running its script, declare `allowed-tools` in its `SKILL.md`, or add rules in your own settings, which `setup.sh` never touches:
   - Claude Code: `.claude/settings.local.json`, `permissions.allow`: `Skill(local-foo)` and `Bash(skills/local-foo/scripts/foo.sh *)`.
