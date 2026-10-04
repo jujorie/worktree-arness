@@ -10,12 +10,3 @@
 *.bak
 /opencode.json
 /tmp/
-
-# Skills: private by default. Only the shared skills listed here are committed; any other folder in
-# skills/ is a local skill of this machine. A new shared skill needs its line here (one per skill, no globs).
-/skills/*
-!/skills/README.md
-!/skills/repo-clone/
-!/skills/worktree-create/
-!/skills/worktree-config/
-!/skills/worktree-clean/

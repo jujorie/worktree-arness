@@ -157,12 +157,13 @@ permission_problems() {
   rm -rf "$d"
 }
 
-# --- local skills (any skills/<name>/ not listed in the .gitignore allowlist) ----------
+# --- local skills (any skills/<name>/ not listed in the skills/.gitignore allowlist) ----------
 
-# mk_git_root <dir>: a throwaway git checkout with the repo's .gitignore and providers.
+# mk_git_root <dir>: a throwaway git checkout with the repo's providers and skills/.gitignore.
 mk_git_root() {
-  cp "$REPO_ROOT/.gitignore" "$1/"
   cp -R "$REPO_ROOT/providers" "$1/"
+  mkdir -p "$1/skills"
+  cp "$REPO_ROOT/skills/.gitignore" "$1/skills/"
   git -C "$1" init -q
 }
 
@@ -208,7 +209,7 @@ mk_git_root() {
   cp -R "$REPO_ROOT/skills" "$fake/"
   rm -rf "$fake/skills/worktree-clean"
   mkdir -p "$fake/skills/worktree-clean"      # present but not what git would commit once unlisted
-  sed -i.bak '/worktree-clean/d' "$fake/.gitignore"
+  sed -i.bak '/worktree-clean/d' "$fake/skills/.gitignore"
   run permission_problems "$fake"
   rm -rf "$fake"
   [[ "$output" == *"claude: stale Skill(worktree-clean)"* ]]

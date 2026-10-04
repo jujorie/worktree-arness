@@ -1,0 +1,11 @@
+# Private by default: everything here is ignored except this file, the README and the shared skills.
+# Any other folder is a local skill of this machine and is never committed.
+# A new shared skill needs its line below (one per skill, no globs: a pattern like worktree-* would also
+# publish a private skill with that prefix).
+/*
+!/.gitignore
+!/README.md
+!/repo-clone/
+!/worktree-create/
+!/worktree-config/
+!/worktree-clean/

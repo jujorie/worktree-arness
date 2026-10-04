@@ -4,13 +4,13 @@ Each subfolder is a skill (`SKILL.md`, `scripts/`, `tests/`), shared by Claude C
 
 ## Shared skills
 
-Committed to the repo, and listed one by one in the `.gitignore` allowlist (see below). Tests and CI check them: structure, permissions in `providers/`, shellcheck, bats.
+Committed to the repo, and listed one by one in the allowlist in `skills/.gitignore` (see below). Tests and CI check them: structure, permissions in `providers/`, shellcheck, bats.
 
-**Adding a shared skill:** create `skills/<name>/` and add `!/skills/<name>/` to the allowlist in `.gitignore` (no globs: a pattern like `worktree-*` would also publish a private skill with that prefix). Add its permission entries in `providers/` too. If you forget the `.gitignore` line, the skill is not committed and CI fails because its permission rules point to a skill that is not there.
+**Adding a shared skill:** create `skills/<name>/` and add `!/<name>/` to the allowlist in `skills/.gitignore` (no globs: a pattern like `worktree-*` would also publish a private skill with that prefix). Add its permission entries in `providers/` too. If you forget the line in `skills/.gitignore`, the skill is not committed and CI fails because its permission rules point to a skill that is not there.
 
 ## Local skills
 
-`skills/` is **private by default**: `.gitignore` ignores everything in it except `README.md` and the shared skills above. So any other folder is a local skill of your machine, with any name, and it is never committed. All three providers find it with no setup, because `.claude/skills` and `.agents/skills` point to this folder.
+`skills/` is **private by default**: `skills/.gitignore` ignores everything in it except `README.md` and the shared skills above. So any other folder is a local skill of your machine, with any name, and it is never committed. All three providers find it with no setup, because `.claude/skills` and `.agents/skills` point to this folder.
 
 To add one, copy it or link it (a link lets the skill live in its own private repo), then restart the agent session:
 
