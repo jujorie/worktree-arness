@@ -3,19 +3,27 @@ load helpers
 
 # All shell scripts shipped by the repo, including skill scripts.
 all_scripts() {
-  ls "$REPO_ROOT"/setup.sh "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/providers/*/setup.sh \
-     "$REPO_ROOT"/skills/*/scripts/*.sh
+  ls "$REPO_ROOT"/setup.sh "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/providers/*/setup.sh
+  skill_scripts
+}
+
+# Scripts of the shared skills (local-* skills are not checked).
+skill_scripts() {
+  local d
+  while IFS= read -r d; do ls "$d"scripts/*.sh 2>/dev/null || true; done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
 @test "every script has a bash shebang and LF endings" {
-  for f in $(all_scripts); do
+  # entry points only: scripts/lib.sh is sourced, not executed
+  for f in "$REPO_ROOT"/setup.sh "$REPO_ROOT"/providers/*/setup.sh $(skill_scripts); do
     [ "$(head -1 "$f")" = "#!/usr/bin/env bash" ]
     ! grep -q $'\r' "$f"
   done
 }
 
 @test "entry scripts are executable" {
-  for f in "$REPO_ROOT"/setup.sh "$REPO_ROOT"/providers/*/setup.sh "$REPO_ROOT"/skills/*/scripts/*.sh; do
+  # entry points only: scripts/lib.sh is sourced, not executed
+  for f in "$REPO_ROOT"/setup.sh "$REPO_ROOT"/providers/*/setup.sh $(skill_scripts); do
     [ -x "$f" ]
   done
 }
@@ -47,17 +55,17 @@ all_scripts() {
 }
 
 @test "every skill has SKILL.md with name matching its directory" {
-  for d in "$REPO_ROOT"/skills/*/; do
+  while IFS= read -r d; do
     n="$(basename "$d")"
     [ -f "$d/SKILL.md" ]
     grep -qx "name: $n" "$d/SKILL.md"
     grep -q '^description: .' "$d/SKILL.md"
-  done
+  done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
 @test "skill scripts live under <skill>/scripts" {
   # no loose shell scripts directly in a skill folder or elsewhere in skills/
-  [ -z "$(find "$REPO_ROOT/skills" -name '*.sh' -not -path '*/scripts/*')" ]
+  [ -z "$(find "$REPO_ROOT/skills" -name '*.sh' -not -path '*/scripts/*' -not -path '*/skills/local-*')" ]
 }
 
 # --- permissions stay in sync with the skills --------------------------------
@@ -68,7 +76,7 @@ all_scripts() {
 permission_problems() {
   local root="$1" claude="$1/providers/claude/settings.json" opencode="$1/providers/opencode/opencode.json"
   local d s f rule name md
-  for d in "$root"/skills/*/; do
+  while IFS= read -r d; do
     s="$(basename "$d")"
     grep -qF "\"Skill($s)\"" "$claude" || echo "claude: missing Skill($s)"
     grep -qF "\"$s\": \"allow\"" "$opencode" || echo "opencode: skill $s is not allowed"
@@ -84,7 +92,7 @@ permission_problems() {
         echo "skill $s: allowed-tools lacks $f"
       fi
     done
-  done
+  done < <(shared_skill_dirs "$root")
   # stale rules: skills or scripts that no longer exist
   for name in $(grep -o '"Skill([^)]*)"' "$claude" | sed 's/^"Skill(//; s/)"$//'); do
     [ -d "$root/skills/$name" ] || echo "claude: stale Skill($name)"
@@ -143,4 +151,34 @@ permission_problems() {
   ! json_looks_valid "$d/open.json"
   ! json_looks_valid "$d/noobject.json"
   rm -rf "$d"
+}
+
+# --- local skills (skills/local-*) -----------------------------------------------
+
+@test "shared_skill_dirs leaves out local-* skills" {
+  d="$(mktemp -d)"
+  mkdir -p "$d/skills/a" "$d/skills/local-b" "$d/skills/c-local"
+  run shared_skill_dirs "$d"
+  rm -rf "$d"
+  [[ "$output" == *"/skills/a/"* ]]
+  [[ "$output" == *"/skills/c-local/"* ]]
+  [[ "$output" != *"local-b"* ]]
+}
+
+@test "the permission check ignores local skills" {
+  fake="$(mktemp -d)"
+  cp -R "$REPO_ROOT/providers" "$REPO_ROOT/skills" "$fake/"
+  mkdir -p "$fake/skills/local-mine/scripts"
+  touch "$fake/skills/local-mine/scripts/mine.sh"
+  printf -- '---\nname: something-else\n---\n' > "$fake/skills/local-mine/SKILL.md"
+  run permission_problems "$fake"
+  rm -rf "$fake"
+  [ -z "$output" ]
+}
+
+@test "skills/local-* is git-ignored and none is tracked" {
+  git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout"
+  git -C "$REPO_ROOT" check-ignore -q skills/local-demo/SKILL.md
+  git -C "$REPO_ROOT" check-ignore -q skills/local-demo/scripts/x.sh
+  [ -z "$(git -C "$REPO_ROOT" ls-files 'skills/local-*')" ]
 }

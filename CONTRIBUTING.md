@@ -58,6 +58,10 @@ Before asking for review, check that:
 
 Keep a PR to one concern; small PRs get merged faster.
 
+## Local skills
+
+A skill that should not be shared goes in `skills/local-<name>/`: it is git-ignored and skipped by the checks. See `skills/README.md`. Never commit one, and do not reference it from committed files.
+
 ## Style
 
 Follow [CODESTYLE.md](CODESTYLE.md).

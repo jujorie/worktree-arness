@@ -34,3 +34,12 @@ json_looks_valid() {
     [ "$o" -eq "$c" ] || return 1
   done
 }
+
+# Skill folders shipped by the repo at root $1, one per line. Skills named local-* are private to a machine
+# (git-ignored), so no repo check applies to them.
+shared_skill_dirs() {
+  local d
+  for d in "$1"/skills/*/; do
+    case "$(basename "$d")" in local-*) ;; *) printf '%s\n' "$d" ;; esac
+  done
+}

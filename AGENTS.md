@@ -9,6 +9,7 @@ Shared agent configuration (skills, agents, instructions) used with Claude Code,
 - Skills: each lives in `skills/<name>/` with `SKILL.md`, its scripts in `skills/<name>/scripts/` and bats tests in `skills/<name>/tests/`. To clone a repo, use the `repo-clone` skill.
 - Follow `CODESTYLE.md` for naming and conventions and `CONTRIBUTING.md` for branches, commits and pull requests. Never push to `main`; work on a branch.
 - Cloning repos, creating worktrees, applying their config and cleaning them up always goes through the skills `repo-clone`, `worktree-create`, `worktree-config` and `worktree-clean`. Never run their scripts or the equivalent `git clone` / `git worktree` commands directly: the skill holds the questions to ask and the conditions to stop on.
+- `skills/local-*/` are private skills of this machine (git-ignored). Use them like any skill, but never commit them, copy their content into committed files or mention them in commits and pull requests.
 - Workspace folders (git-ignored, each has a README with its usage): `source/` repo clones (`repo-clone`), `worktrees/<repo>/<name>` one per task (`worktree-create`, `worktree-config`, `worktree-clean`), `config/<repo>/` local files copied into each new worktree. Work in a worktree, not in `source/`. Read the folder's README before using it.
 
 ## Memory

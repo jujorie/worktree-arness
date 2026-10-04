@@ -10,3 +10,6 @@
 *.bak
 /opencode.json
 /tmp/
+
+# Private skills: copy or link a skill as skills/local-<name>/ and it is picked up, never committed
+/skills/local-*/
