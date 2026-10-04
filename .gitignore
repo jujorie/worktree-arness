@@ -11,5 +11,11 @@
 /opencode.json
 /tmp/
 
-# Private skills: copy or link a skill as skills/local-<name>/ and it is picked up, never committed
-/skills/local-*/
+# Skills: private by default. Only the shared skills listed here are committed; any other folder in
+# skills/ is a local skill of this machine. A new shared skill needs its line here (one per skill, no globs).
+/skills/*
+!/skills/README.md
+!/skills/repo-clone/
+!/skills/worktree-create/
+!/skills/worktree-config/
+!/skills/worktree-clean/

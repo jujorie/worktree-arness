@@ -53,14 +53,14 @@ Before asking for review, check that:
 - [ ] New behavior has bats tests, including the failure paths.
 - [ ] Docs are updated: the skill's `SKILL.md`, the folder README, `README.md` if the layout changed.
 - [ ] You edited the sources, not generated files (`.claude/`, `.agents/`, `CLAUDE.md`, `opencode.json`). Providers live in `providers/`.
-- [ ] A new skill with a script has its permission entries in `providers/claude/settings.json` and `providers/opencode/opencode.json`. `tests/repo.bats` fails if they are missing.
+- [ ] A new skill is listed in the `.gitignore` allowlist, and, if it has a script, has its permission entries in `providers/claude/settings.json` and `providers/opencode/opencode.json`. `tests/repo.bats` fails if they are missing.
 - [ ] Examples are generic (`PROJ-123`, `my-repo`): no company, customer or internal project names, no secrets, no personal paths.
 
 Keep a PR to one concern; small PRs get merged faster.
 
 ## Local skills
 
-A skill that should not be shared goes in `skills/local-<name>/`: it is git-ignored and skipped by the checks. See `skills/README.md`. Never commit one, and do not reference it from committed files.
+`skills/` is private by default: a skill that is not in the allowlist in `.gitignore` is a local skill, never committed and skipped by the checks. See `skills/README.md`. Do not reference one from committed files. A **new shared skill** needs its `!/skills/<name>/` line in `.gitignore`.
 
 ## Style
 

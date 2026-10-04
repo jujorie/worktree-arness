@@ -35,11 +35,18 @@ json_looks_valid() {
   done
 }
 
-# Skill folders shipped by the repo at root $1, one per line. Skills named local-* are private to a machine
-# (git-ignored), so no repo check applies to them.
+# Skill folders shipped by the repo at root $1, one path per line, each ending in "/".
+# In a git checkout that is what git would commit (tracked, or untracked but not ignored): skills/ is
+# private by default, so local skills are git-ignored and no repo check applies to them.
+# Outside a git checkout (test sandboxes) every folder counts.
 shared_skill_dirs() {
-  local d
-  for d in "$1"/skills/*/; do
-    case "$(basename "$d")" in local-*) ;; *) printf '%s\n' "$d" ;; esac
-  done
+  local root="$1" name
+  if [ "$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" = "$(cd -P "$root" && pwd -P)" ]; then
+    git -C "$root" ls-files -co --exclude-standard -- skills | cut -d/ -f2 | LC_ALL=C sort -u | while IFS= read -r name; do
+      if [ -d "$root/skills/$name" ]; then printf '%s/skills/%s/\n' "$root" "$name"; fi
+    done
+  else
+    local d
+    for d in "$root"/skills/*/; do printf '%s\n' "$d"; done
+  fi
 }
