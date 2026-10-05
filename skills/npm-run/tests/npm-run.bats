@@ -235,6 +235,81 @@ teardown() {
   wait "$other" 2>/dev/null || true
 }
 
+@test "stop removes its pid, log, install.log and the folders left empty" {
+  rm -rf "$(WT a/feat/x)/node_modules"
+  "$SCRIPT" run --install serve >/dev/null
+  [ -f "$(state a/feat/x)/install.log" ]
+  run "$SCRIPT" stop --worktree a/feat/x serve
+  [ "$status" -eq 0 ]
+  [ ! -e "$ARNESS_ROOT/tmp/npm-run" ]
+  [ -d "$ARNESS_ROOT/tmp" ]
+}
+
+@test "stop keeps the files of another script still running in the worktree" {
+  (cd "$(WT a/feat/x)" && npm pkg set scripts.watch="sleep 30" >/dev/null)
+  "$SCRIPT" run serve >/dev/null
+  "$SCRIPT" run watch >/dev/null
+  echo log > "$(state a/feat/x)/install.log"
+  run "$SCRIPT" stop --worktree a/feat/x serve
+  [ "$status" -eq 0 ]
+  [ ! -e "$(state a/feat/x)/serve.pid" ]
+  [ ! -e "$(state a/feat/x)/serve.log" ]
+  [ -f "$(state a/feat/x)/watch.pid" ]
+  [ -f "$(state a/feat/x)/install.log" ]
+}
+
+@test "a FINISHED script keeps its log until clean" {
+  run "$SCRIPT" run ok
+  [ "$status" -eq 0 ]
+  [ -f "$(state a/feat/x)/ok.log" ]
+  run "$SCRIPT" clean
+  [ "$status" -eq 0 ]
+  [ "$output" = "CLEANED a/feat/x ok.log" ]
+  [ ! -e "$ARNESS_ROOT/tmp/npm-run" ]
+}
+
+@test "an EXITED script keeps its log until clean" {
+  mkdir -p "$(state a/feat/x)"
+  echo 999999 > "$(state a/feat/x)/serve.pid"
+  echo "it died" > "$(state a/feat/x)/serve.log"
+  run "$SCRIPT" ps
+  [[ "$output" == "EXITED "* ]]
+  [ -f "$(state a/feat/x)/serve.log" ]
+  run "$SCRIPT" clean
+  [ "$output" = "CLEANED a/feat/x serve.log" ]
+}
+
+@test "clean never touches what still runs" {
+  "$SCRIPT" run serve >/dev/null
+  pid="$(cat "$(state a/feat/x)/serve.pid")"
+  echo log > "$(state a/feat/x)/install.log"
+  echo old > "$(state a/feat/x)/ok.log"
+  echo 999999 > "$(state a/feat/x)/gone.pid"
+  run "$SCRIPT" clean
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLEANED a/feat/x gone.pid"* ]]
+  [[ "$output" == *"CLEANED a/feat/x ok.log"* ]]
+  [ -f "$(state a/feat/x)/serve.pid" ]
+  [ -f "$(state a/feat/x)/serve.log" ]
+  [ -f "$(state a/feat/x)/install.log" ]
+  kill -0 "$pid"
+}
+
+@test "clean --worktree only cleans that worktree; nothing to clean is NONE" {
+  mk_wt a feat/y
+  mkdir -p "$(state a/feat/x)" "$(state a/feat/y)"
+  echo x > "$(state a/feat/x)/ok.log"
+  echo y > "$(state a/feat/y)/ok.log"
+  run "$SCRIPT" clean --worktree a/feat/y
+  [ "$output" = "CLEANED a/feat/y ok.log" ]
+  [ -f "$(state a/feat/x)/ok.log" ]
+  [ ! -e "$(state a/feat/y)" ]
+  run "$SCRIPT" clean --worktree a/feat/y
+  [ "$output" = "NONE" ]
+  run "$SCRIPT" clean --worktree ../x
+  [ "$status" -eq 2 ]
+}
+
 @test "stop needs a target" {
   run "$SCRIPT" stop
   [ "$status" -eq 2 ]

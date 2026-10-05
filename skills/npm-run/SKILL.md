@@ -1,6 +1,6 @@
 ---
 name: npm-run
-description: Run an npm script of a worktree in the background, and list or stop the ones started. Use whenever the user asks to run, start, launch, list or stop an npm script in a worktree, e.g. "lanza npm start en el worktree", "arranca el dev server", "ejecuta los tests de X", "para el start". Always use this skill, never `npm run` or its script directly. Fails with NO_COMMAND, UNKNOWN_SCRIPT or NO_PACKAGE_JSON.
+description: Run an npm script of a worktree in the background, and list, stop or clean up the ones started. Use whenever the user asks to run, start, launch, list, stop or clean up an npm script in a worktree, e.g. "lanza npm start en el worktree", "arranca el dev server", "ejecuta los tests de X", "para el start", "limpia los logs de npm". Always use this skill, never `npm run` or its script directly. Fails with NO_COMMAND, UNKNOWN_SCRIPT or NO_PACKAGE_JSON.
 allowed-tools: Bash(skills/npm-run/scripts/npm-run.sh *)
 ---
 
@@ -40,17 +40,20 @@ All checks are done by `scripts/npm-run.sh` (in this skill's folder): the worktr
 | `NO_NPM` | 3 | npm is not installed. Finish. |
 | error on stderr | 2 | Invalid input (slug, script name, options). Show the message. |
 
-### List and stop
+### List, stop and clean up
 
 ```bash
 skills/npm-run/scripts/npm-run.sh ps                                   # RUNNING / EXITED lines, or NONE
 skills/npm-run/scripts/npm-run.sh stop --worktree <repo>/<name> [<script>]
 skills/npm-run/scripts/npm-run.sh stop <script>                        # that script in every worktree
 skills/npm-run/scripts/npm-run.sh stop --all
+skills/npm-run/scripts/npm-run.sh clean [--worktree <repo>/<name>]     # CLEANED lines, or NONE
 skills/npm-run/scripts/npm-run.sh scripts [--worktree <repo>/<name>]   # SCRIPT lines
 ```
 
 `stop` prints `STOPPED <slug> <script> <pid>` per process (TERM to its process group, KILL after 5 s), or `NONE`. Ask before `stop --all` if the user did not say it.
+
+Files live in `tmp/npm-run/<repo>/<name>/`. `stop` removes the pid and log of what it stops, plus the `install.log` and folders left empty. A script that ended by itself (`FINISHED`, `EXITED`) keeps its log, the only record of what happened. Read it first if it matters, then `clean` removes the logs and pids of everything that no longer runs and the empty folders (`CLEANED <slug> <file>` per file). It never touches what still runs.
 
 ## Rules
 

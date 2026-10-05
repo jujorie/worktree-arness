@@ -50,7 +50,7 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; fails with `NO_SOURCE` / `NO_NAME` |
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
-| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies); list and stop them |
+| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies); list, stop and clean up after them |
 
 Rules for new skills: scripts go in `skills/<name>/scripts/`, tests in `skills/<name>/tests/`, and `name` in `SKILL.md` must equal the folder name.
 
