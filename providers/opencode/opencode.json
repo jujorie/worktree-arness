@@ -12,7 +12,8 @@
       "repo-clone": "allow",
       "worktree-create": "allow",
       "worktree-clean": "allow",
-      "worktree-config": "allow"
+      "worktree-config": "allow",
+      "npm-run": "allow"
     }
   }
 }
