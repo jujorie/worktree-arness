@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${ARNESS_ROOT:=$(cd "$(dirname "$0")/../.." && pwd)}"
-# shellcheck source=../../scripts/lib.sh
+# shellcheck source=SCRIPTDIR/../../scripts/lib.sh
 . "$ARNESS_ROOT/scripts/lib.sh"
 
 # OpenCode reads AGENTS.md natively and skills from .agents/skills.
