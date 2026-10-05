@@ -38,6 +38,7 @@ To share or migrate memory, copy the folder by hand (`cp -R .memory /path/to/oth
 | `config/` | Local files copied into each new worktree, plus an optional `install.sh` (git-ignored; see `config/README.md`) |
 | `scripts/lib.sh` | Helpers (`link`, `copy_once`, `render`) sourced by setup scripts |
 | `tmp/` | Not in the repo (git-ignored), created by the scripts when needed: logs such as the `install.sh` output of `worktree-config` |
+| `.env` | Local settings shared by skills, `KEY=value` per line (git-ignored). Scripts read it without sourcing it; a variable set in the terminal wins |
 
 Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path at setup time.
 
@@ -49,6 +50,7 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; fails with `NO_SOURCE` / `NO_NAME` |
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
+| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies); list and stop them |
 
 Rules for new skills: scripts go in `skills/<name>/scripts/`, tests in `skills/<name>/tests/`, and `name` in `SKILL.md` must equal the folder name.
 
