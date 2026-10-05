@@ -87,7 +87,7 @@ list_worktrees() {
       case "$line" in
         "worktree $prefix"?*)
           path="${line#worktree }"
-          [ -d "$path" ] && [ ! -L "$path" ] || continue
+          if [ ! -d "$path" ] || [ -L "$path" ]; then continue; fi
           printf '%s/%s\n' "$repo" "${path#"$prefix"}" ;;
       esac
     done < <(git -C "$repo_dir" worktree list --porcelain 2>/dev/null)
@@ -294,7 +294,7 @@ cmd_stop() {
     esac
   done
   if [ "$all" -eq 1 ]; then
-    [ -z "$want" ] && [ -z "$only" ] || die "--all takes no worktree or script"
+    if [ -n "$want" ] || [ -n "$only" ]; then die "--all takes no worktree or script"; fi
   else
     [ -n "$want" ] || [ -n "$only" ] || die "stop needs --worktree, a script, or --all"
     [ -z "$want" ] || validate_name "$want" || die "invalid worktree: '$want'"
