@@ -20,7 +20,7 @@ Save what you learn **when you learn it**, not at the end. Something durable and
 | What you learned | Where it goes |
 |---|---|
 | A convention or trap for anyone writing scripts, skills or docs here | `CODESTYLE.md` or `CONTRIBUTING.md`, on a branch with a PR |
-| How a specific skill behaves, or a trap of it | Its `SKILL.md` (or its `references/`). A shared skill goes on a branch with a PR; a private one is just edited |
+| How a specific skill behaves, or a trap of it | The skill itself, following `CODESTYLE.md` → *Continuous improvement* when it has a `## Findings` index (its script, a step, `references/findings.md`). A shared skill goes on a branch with a PR; a private one is just edited |
 | How a workspace folder is used | That folder's `README.md` |
 | The user's preferences, corrections to your approach, decisions and their reason, this machine's setup, pointers to external resources | `.memory/` (below) |
 | What the code, the docs or git history already say | Nowhere |

@@ -5,7 +5,7 @@ description: Review the conversation for what was learned and save each item whe
 
 # learnings-save
 
-Turns what was learned in this conversation into saved knowledge, using the table in `AGENTS.md`, section "What you learn". It complements saving as you go: it catches what slipped through.
+Turns what was learned in this conversation into saved knowledge, using the table in `AGENTS.md`, section "What you learn". It complements saving as you go: it catches what slipped through. Skills with a `## Findings` index already learn by themselves during the task (`CODESTYLE.md` → *Continuous improvement*). Here you only check that nothing they should have kept was missed.
 
 ## Procedure
 
@@ -21,7 +21,7 @@ Turns what was learned in this conversation into saved knowledge, using the tabl
 3. Pick one destination for each item with the table in `AGENTS.md`:
    - **memory**: update the memory that already covers it, or create one (frontmatter and index line as in `AGENTS.md`, section "Memory"). Convert relative dates to absolute ones. Delete memories that turned out wrong, or that are now written in the repo.
    - **repo doc** (`CODESTYLE.md`, `CONTRIBUTING.md`, a shared skill, a folder `README.md`): draft the exact change. Do not commit or push: ask whether to open a branch and PR.
-   - **private skill**: edit its `SKILL.md` directly. It is never committed.
+   - **a skill** used in this conversation: apply `CODESTYLE.md` → *Continuous improvement* (admission, destination, origin). A private skill is edited directly; for a shared one, propose the branch and PR.
 4. Check links: every `[[name]]` in `.memory/` points to an existing memory, or is meant as a future one.
 5. Report as a table: item, destination (file), and done / proposed. End with what is still pending.
 

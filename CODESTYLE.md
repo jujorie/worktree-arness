@@ -60,6 +60,38 @@ Each of these has broken a script here that looked fine.
 - Body: what it does, `## Procedure` (a table of status → action) and `## Rules` (what the agent must never do).
 - Use the same words for the same thing: **worktree**, **source**, **base branch**, **slug** (`<repo>/<name>`).
 
+### Continuous improvement
+
+A skill that opts in improves with use: when it learns something, it updates itself, in the moment, before going on with the task. It opts in with a `## Findings` section in its `SKILL.md` (see *Index* below).
+
+**Triggers.**
+- The user corrects the skill's result or states a preference about it.
+- A failure of its own costs a retry (script, tool, environment).
+- A review comment, or a confirmed finding, that the skill should have caught.
+
+**Admission.** Before saving anything, ask: *would this change what the skill does on another task (another ticket, worktree or repo)?* If not, it is context of this incident. It goes in the PR body or in `.memory/`, not in the skill.
+
+**Destination.** The first row that fits:
+
+| The finding is… | Change in the skill |
+|---|---|
+| checkable deterministically (a grep, a git or gh query) | a check in its `scripts/`, with a bats test that reproduces the case (fails before the fix, passes after) |
+| a gap in the procedure (a missing status, question or stop) | that step or status-table row of the `SKILL.md` |
+| a pattern or trap with no step yet | an entry in `references/findings.md` and a line in the `## Findings` index |
+| knowledge about the environment or the domain the skill already keeps in a reference (an app map, setup, troubleshooting) | that reference file, plus a line in the index if it is new |
+| already covered | only add the origin to the existing entry; do not duplicate it |
+
+An entry moves up into a step of the `SKILL.md` when it is seen to be general, not because it has repeated.
+
+**Index.** `## Findings` in the `SKILL.md` says to follow this section, and lists one line per entry: `- <when it applies>: [<title>](references/findings.md#<anchor>)`. The agent always reads the index, which is cheap, and opens an entry only when it applies to the task. Each entry in `references/findings.md` is a `### <title>` heading followed by what happens, what to do and its origin.
+
+**Rules.**
+- Edit only inside the skill's own folder. `AGENTS.md`, `CODESTYLE.md`, `CONTRIBUTING.md` and the configuration only change by proposing it to the user.
+- Only add or strengthen. Removing or loosening an entry (for example, one that gives false positives) is proposed to the user.
+- Every entry cites its origin: `PR #<n>`, or `session <YYYY-MM-DD>` when there is no PR. Write down the pattern only: no ticket IDs or people's names in the rule (they may appear as an example).
+- A private skill is edited directly. In a shared skill, the change stays in the working tree and the user is asked whether to open a branch and PR.
+- When the task ends, say what the skill learned and where it was saved.
+
 ## Tests (bats)
 
 - One file per script: `skills/<name>/tests/<script>.bats`. Repo-wide checks live in `tests/`.
