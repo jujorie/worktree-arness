@@ -35,6 +35,23 @@ Naming and conventions used across the repo. When in doubt, copy the nearest exi
 - Be safe by default: validate every name or path that comes from outside, never write outside the folder the script owns, never overwrite or delete without an explicit option, and say what was skipped.
 - Network is explicit and bounded: set `GIT_TERMINAL_PROMPT=0`, fetch only what is needed, and offer `--no-fetch`.
 
+### Pitfalls
+
+Each of these has broken a script here that looked fine.
+
+| Pitfall | Do instead |
+|---|---|
+| `cmd \| head -n N` under `pipefail`: once the output exceeds the pipe buffer (64 KB), `cmd` dies with SIGPIPE (exit 141). Small test data hides it. | `cmd \| awk 'NR <= N'` (awk reads all its input). Test with big data too. |
+| A function that prints a status and exits, called as `x="$(f)"`: the status stays in `x` and the `exit` only leaves the subshell. | `x="$(f)" \|\| rc=$?`, then print `$x` and `exit "$rc"`. |
+| `v="…$([ "$a" = b ] && echo y)…"`: when the test is false the assignment returns 1 and `set -e` stops the script. | Compute the piece with an `if` before the assignment. |
+| A `case … esac` inside `$(…)`: bash 3.2 cannot parse it (`bash -n` does not notice). | Move the `case` into a function and call it. |
+| `"$name»"` or any non-ASCII character right after a variable: its bytes are taken as part of the name. | `"${name}»"`. |
+| `jq --args a b 'filter' file`: the positional arguments come after the filter, so `a` becomes the filter. | `--argjson ids "$(printf '%s\n' "$@" \| jq -R . \| jq -s .)"`. |
+| `awk -v re='\('`: `-v` processes the backslashes away. | `RE='\(' awk '$0 ~ ENVIRON["RE"]'`. |
+| Alternation with backslash-pipe in a basic `sed` regex: BSD `sed` does not support it. | `sed -E` (extended regex), where alternation is a plain pipe inside a group. |
+| `sed 's/[áé]/x/'`: in the C locale a multibyte class matches single bytes. | One literal substitution per character (`s/á/a/g; s/é/e/g`). |
+| `cmd > f.tmp && mv f.tmp f`: when `cmd` fails, `f.tmp` is left behind. | `trap 'rm -f "$tmp"' EXIT`, or remove it in the failure branch. |
+
 ## Skills
 
 - Folder `skills/<name>/`, `<name>` in `kebab-case`, `<noun>-<verb>` (`repo-clone`, `worktree-create`). It must equal `name` in `SKILL.md`.
@@ -49,6 +66,7 @@ Naming and conventions used across the repo. When in doubt, copy the nearest exi
 - Test names are lowercase sentences that state the behavior: `@test "remove skips DIRTY without --force"`.
 - Each test builds its own world in `mktemp -d` (`ARNESS_ROOT`, throwaway git repos) and removes it in `teardown`. No real network, no real remotes, no writes outside the temp dir.
 - Cover the failure paths and the unsafe inputs, not only the happy path.
+- On macOS, also run them with the system bash 3.2, which `#!/usr/bin/env bash` skips when a newer bash is installed: `PATH=/bin:/usr/bin:$PATH ./scripts/test.sh`.
 - Helper functions are `snake_case` and go at the top of the file, or in `tests/helpers.bash` when shared.
 
 ## Docs and examples
