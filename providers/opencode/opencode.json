@@ -13,7 +13,8 @@
       "worktree-create": "allow",
       "worktree-clean": "allow",
       "worktree-config": "allow",
-      "npm-run": "allow"
+      "npm-run": "allow",
+      "learnings-save": "allow"
     }
   }
 }
