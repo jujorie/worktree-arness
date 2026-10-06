@@ -64,6 +64,8 @@ Each of these has broken a script here that looked fine.
 
 A skill that opts in improves with use: when it learns something, it updates itself, in the moment, before going on with the task. It opts in with a `## Findings` section in its `SKILL.md` (see *Index* below).
 
+A skill meant to work outside this repo does not point here: its `## Findings` carries the triggers, the admission test, its own destinations and the rules below. Nothing it needs should live outside its folder.
+
 **Triggers.**
 - The user corrects the skill's result or states a preference about it.
 - A failure of its own costs a retry (script, tool, environment).
