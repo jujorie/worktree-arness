@@ -8,6 +8,7 @@
       "Skill(worktree-clean)",
       "Skill(worktree-config)",
       "Skill(npm-run)",
+      "Skill(learnings-save)",
       "Bash(skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash(skills/worktree-create/scripts/worktree-create.sh *)",
