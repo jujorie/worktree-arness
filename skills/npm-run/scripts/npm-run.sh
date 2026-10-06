@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Run an npm script of a worktree in the background, and list or stop the ones it started.
+# Run an npm script of a worktree in the background, and list, stop or clean up the ones it started.
 #
 # Usage: npm-run.sh run     [--worktree <repo>/<name>] [--install] <script> [-- <args>...]
 #        npm-run.sh scripts [--worktree <repo>/<name>]
 #        npm-run.sh ps
 #        npm-run.sh stop    [--worktree <repo>/<name>] [<script>] | --all
+#        npm-run.sh clean   [--worktree <repo>/<name>]
 #
 # The worktree is one of worktrees/<repo>/<name> made from a repo in source/. Without --worktree, the
 # only one there is used; with several, nothing runs and they are listed (CHOOSE_WORKTREE).
@@ -13,6 +14,8 @@
 # process group, so stop also ends its children (dev servers, watchers).
 # Without node_modules it stops with CONFIRM_INSTALL; --install runs `npm ci` (with package-lock.json)
 # or `npm install` first. Logs and pids: <arness>/tmp/npm-run/<repo>/<name>/<script>.{log,pid}.
+# stop removes the pid and log of what it stops, and the install.log and folders left empty. A script
+# that ended by itself (FINISHED, EXITED) keeps its log until clean removes everything that no longer runs.
 #
 # Stdout, first word is the status:
 #   STARTED <repo>/<name> <script> <pid> <log>     running in the background
@@ -22,8 +25,9 @@
 #                                                  UNKNOWN_SCRIPT)
 #   RUNNING <repo>/<name> <script> <pid> <log>     ps: still running
 #   EXITED <repo>/<name> <script> <pid> <log>      ps: no longer running (its pid file is removed)
-#   STOPPED <repo>/<name> <script> <pid>           stop
-#   NONE                                           ps / stop: nothing started by this script
+#   STOPPED <repo>/<name> <script> <pid>           stop (its pid and log are removed)
+#   CLEANED <repo>/<name> <file>                   clean: a log or stale pid file removed
+#   NONE                                           ps / stop / clean: nothing to show, stop or remove
 #   CHOOSE_WORKTREE <repo>/<name>...               several worktrees, none given (exit 10)
 #   NO_WORKTREE                                    no worktree at all (exit 4)
 #   NOT_FOUND <repo>/<name>                        not a worktree of a repo in source/ (exit 4)
@@ -272,6 +276,26 @@ cmd_ps() {
   [ "$any" -eq 1 ] || echo "NONE"
 }
 
+# prune_dirs <dir>: remove <dir> and its parents while empty, up to <arness>/tmp (kept).
+prune_dirs() {
+  local d="$1" top="$ROOT/tmp"
+  while [ "$d" != "$top" ]; do
+    case "$d" in "$top"/*) ;; *) return 0 ;; esac
+    rmdir "$d" 2>/dev/null || return 0
+    d="$(dirname "$d")"
+  done
+}
+
+# forget <pid file>: remove it and its log; when nothing else runs in that worktree, also its install.log
+# and the folders left empty.
+forget() {
+  local file="$1" dir
+  dir="$(dirname "$file")"
+  rm -f "$file" "${file%.pid}.log"
+  if ! ls "$dir"/*.pid >/dev/null 2>&1; then rm -f "$dir/install.log"; fi
+  prune_dirs "$dir"
+}
+
 # stop_pid <pid>: TERM to its process group, then KILL after 5 s.
 stop_pid() {
   local pid="$1"
@@ -312,18 +336,59 @@ cmd_stop() {
       echo "STOPPED $slug $script $pid"
       any=1
     fi
-    rm -f "$file"
+    forget "$file"
   done < <(each_pid_file)
   [ "$any" -eq 1 ] || echo "NONE"
 }
 
+# cmd_clean [--worktree <slug>]: remove the logs and pid files of what no longer runs, and empty folders.
+cmd_clean() {
+  local want=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --worktree) [ $# -ge 2 ] || die "--worktree needs a value"; want="$2"; shift 2 ;;
+      *)          die "unknown argument: $1" ;;
+    esac
+  done
+  [ -z "$want" ] || validate_name "$want" || die "invalid worktree: '$want'"
+
+  local base="$ROOT/tmp/npm-run" f rel slug dir pid any=0 live p
+  [ -d "$base" ] || { echo "NONE"; return 0; }
+  while IFS= read -r f; do
+    rel="${f#"$base/"}"
+    slug="${rel%/*}"
+    [ -z "$want" ] || [ "$slug" = "$want" ] || continue
+    dir="$(dirname "$f")"
+    case "$f" in
+      *.pid) pid="$(cat "$f")"; if pid_alive "$pid"; then continue; fi ;;
+      *.log)
+        if [ "$(basename "$f")" = install.log ]; then
+          live=0
+          for p in "$dir"/*.pid; do
+            if [ -f "$p" ] && pid_alive "$(cat "$p")"; then live=1; fi
+          done
+          [ "$live" -eq 0 ] || continue
+        elif [ -f "${f%.log}.pid" ] && pid_alive "$(cat "${f%.log}.pid")"; then
+          continue
+        fi ;;
+      *) continue ;;
+    esac
+    rm -f "$f"
+    echo "CLEANED $slug $(basename "$f")"
+    any=1
+    prune_dirs "$dir"
+  done < <(find "$base" -type f \( -name '*.pid' -o -name '*.log' \) | LC_ALL=C sort)
+  [ -n "$want" ] || prune_dirs "$base"
+  [ "$any" -eq 1 ] || echo "NONE"
+}
+
 main() {
-  [ $# -gt 0 ] || die "missing command: run, scripts, ps or stop (-h for help)"
+  [ $# -gt 0 ] || die "missing command: run, scripts, ps, stop or clean (-h for help)"
   local cmd="$1"
   shift
   case "$cmd" in
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
-    run|scripts|ps|stop) ;;
+    -h|--help) sed -n '2,44p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    run|scripts|ps|stop|clean) ;;
     *) die "unknown command: $cmd" ;;
   esac
   if ! command -v npm >/dev/null 2>&1; then echo "NO_NPM"; exit "$EXIT_NO_NPM"; fi
@@ -335,6 +400,7 @@ main() {
     scripts) cmd_scripts "$@" ;;
     ps)      cmd_ps "$@" ;;
     stop)    cmd_stop "$@" ;;
+    clean)   cmd_clean "$@" ;;
   esac
 }
 
