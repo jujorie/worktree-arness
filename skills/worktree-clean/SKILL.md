@@ -23,16 +23,17 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
 2. Show a numbered markdown table: `#`, repo, name, base, status, ahead. Status meaning:
    - `EMPTY`: the branch has no commits of its own yet (a worktree just created). Nothing was merged and nothing is lost, but it is **not** "merged": never describe it as merged.
    - `MERGED`: branch is in its base, or in `origin/<base>` (merged in the remote while the local base is behind). Safe to remove.
+   - `PR_MERGED`: the branch was deleted in origin and a merged pull request had exactly the local tip as head (squash or rebase merges included; typical of someone else's PR checked out to test it). Safe to remove.
    - `NOT_MERGED`: has `ahead` commits not in base. Removing loses them.
-   - `DIRTY`: uncommitted changes. Removing loses them.
+   - `DIRTY`: uncommitted changes. Removing loses them, even if the PR was merged: name the changed files (`git -C <path> status --short`).
    - `UNKNOWN_BASE`: base not recorded (worktree not made by `worktree-create`). Ask the user for the base branch and rerun `list --base <ref>`, or treat it like `NOT_MERGED`.
-   - Note: squash or rebase merges are not detected; they show as `NOT_MERGED`.
-   - The remote side of each base (`origin/<branch>`, or `origin/<base>` for a local base) is refreshed first (one `git fetch` per base). If the fetch fails a `warning:` appears on stderr and the status may be stale: tell the user. Offline: add `--no-fetch`.
+   - Note: squash or rebase merges are detected only through `gh` (`PR_MERGED`); without `gh`, or with `--no-fetch`, they show as `NOT_MERGED` or `EMPTY`.
+   - The remote side of each base (`origin/<branch>`, or `origin/<base>` for a local base) is refreshed first (one `git fetch` per base). If the fetch fails a `warning:` appears on stderr and the status may be stale: tell the user. A `note: origin/<branch> no longer exists` is not a failure: the branch was deleted in origin (usually after its PR merged). Offline: add `--no-fetch`.
 3. Ask: which to delete? A comma-separated list (numbers or names), or `all` / `todos`.
-   - `all` / `todos` means **every `MERGED` worktree only**. Never include `EMPTY` or any other status in it; those only by explicit name.
-   - If nothing is `MERGED` and the user said `all`, say so and ask for explicit names.
-4. For each chosen worktree that is not `MERGED`, ask a second confirmation naming what is lost (the `ahead` commits, or the uncommitted changes). Only if the user confirms, it goes with `--force`.
-5. Run one `remove` per repo, grouping names (no `--force` for the merged ones; a separate call with `--force` for the confirmed ones):
+   - `all` / `todos` means **every `MERGED` or `PR_MERGED` worktree only**. Never include `EMPTY` or any other status in it; those only by explicit name.
+   - If nothing is `MERGED` or `PR_MERGED` and the user said `all`, say so and ask for explicit names.
+4. For each chosen worktree that is `NOT_MERGED`, `DIRTY` or `UNKNOWN_BASE`, ask a second confirmation naming what is lost (the `ahead` commits, or the uncommitted changes). Only if the user confirms, it goes with `--force`. `MERGED`, `PR_MERGED` and `EMPTY` lose nothing: no second confirmation, no `--force`.
+5. Run one `remove` per repo, grouping names (no `--force` for `MERGED`, `PR_MERGED` and `EMPTY`; a separate call with `--force` for the confirmed ones):
    ```bash
    skills/worktree-clean/scripts/worktree-clean.sh remove --source <repo> [--base <ref>] [--force] <name>...
    ```

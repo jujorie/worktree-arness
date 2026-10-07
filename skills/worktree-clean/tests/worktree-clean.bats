@@ -48,6 +48,18 @@ setup() {
   export ARNESS_ROOT="$TMP/root"
   SRC="$ARNESS_ROOT/source"
   mkdir -p "$SRC"
+  # Fake gh, so no test reaches GitHub: it prints $FAKE_GH_HEADS (one PR head per line) and logs each call.
+  # Unset, it fails like an unauthenticated gh.
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_GH_LOG"
+[ -n "${FAKE_GH_HEADS:-}" ] || exit 1
+printf '%s\n' "$FAKE_GH_HEADS"
+EOF
+  chmod +x "$TMP/bin/gh"
+  export PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log"
+  unset FAKE_GH_HEADS
 }
 
 teardown() { rm -rf "$TMP"; }
@@ -405,4 +417,112 @@ merge_into_origin_main() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"warning: could not refresh origin/main"* ]]
   [ "$(col w 5)" = "NOT_MERGED" ]
+}
+
+# --- PR_MERGED: the branch of someone else's pull request, checked out to test it ---
+
+# origin has pr/X-2 with a commit; worktree pr/X-2 is made from origin/pr/X-2 like worktree-create does.
+# Sets ORIGIN and TIP.
+mk_pr_wt() {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git_q -C "$ORIGIN" checkout -q -b pr/X-2
+  echo 2 > "$ORIGIN/g.txt"; git_q -C "$ORIGIN" add g.txt; git_q -C "$ORIGIN" commit -q -m pr
+  git_q -C "$ORIGIN" checkout -q main
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  git_q -C "$SRC/a" worktree add -q -b pr/X-2 "$ARNESS_ROOT/worktrees/a/pr/X-2" origin/pr/X-2
+  git_q -C "$SRC/a" config branch.pr/X-2.arness-base origin/pr/X-2
+  TIP="$(git -C "$SRC/a" rev-parse pr/X-2)"
+}
+
+# The pull request is squash-merged (its commits never reach main) and its branch deleted.
+squash_merge_pr() {
+  git_q -C "$ORIGIN" branch -q -D pr/X-2
+  export FAKE_GH_HEADS="$TIP"
+}
+
+@test "a pull request branch squash-merged and deleted in origin is PR_MERGED" {
+  mk_pr_wt
+  squash_merge_pr
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr/X-2 5)" = "PR_MERGED" ]
+  [[ "$output" == *"note: origin/pr/X-2 no longer exists in a"* ]]
+  [[ "$output" != *"warning:"* ]]
+  grep -q -- "pr list --head pr/X-2 --state merged" "$FAKE_GH_LOG"
+}
+
+@test "remove deletes a PR_MERGED worktree without --force, with its branch and stale remote ref" {
+  mk_pr_wt
+  squash_merge_pr
+  run "$SCRIPT" remove --source a pr/X-2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REMOVED $ARNESS_ROOT/worktrees/a/pr/X-2"* ]]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/pr" ]
+  [ -z "$(git -C "$SRC/a" branch --list pr/X-2)" ]
+  ! git -C "$SRC/a" rev-parse --verify --quiet refs/remotes/origin/pr/X-2
+}
+
+@test "own work squash-merged through a pull request is PR_MERGED, not NOT_MERGED" {
+  mk_remote_wt
+  export FAKE_GH_HEADS="$(git -C "$SRC/a" rev-parse w)"
+  run "$SCRIPT" list
+  [ "$(col w 5)" = "PR_MERGED" ]
+  [ "$(col w 6)" = "1" ]
+}
+
+@test "a merged pull request with another head is not PR_MERGED (local commits after it)" {
+  mk_pr_wt
+  squash_merge_pr
+  echo 3 > "$ARNESS_ROOT/worktrees/a/pr/X-2/h.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/pr/X-2" add h.txt
+  git_q -C "$ARNESS_ROOT/worktrees/a/pr/X-2" commit -q -m local
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "NOT_MERGED" ]
+}
+
+@test "a branch still in origin is not PR_MERGED and gh is not asked" {
+  mk_pr_wt
+  export FAKE_GH_HEADS="$TIP"
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "EMPTY" ]
+  [ ! -e "$FAKE_GH_LOG" ]
+}
+
+@test "a failing gh leaves the status as it was" {
+  mk_pr_wt
+  squash_merge_pr
+  unset FAKE_GH_HEADS
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr/X-2 5)" = "EMPTY" ]
+}
+
+@test "an unreachable origin is not taken as a deleted branch" {
+  mk_pr_wt
+  export FAKE_GH_HEADS="$TIP"
+  git -C "$SRC/a" remote set-url origin "$TMP/does-not-exist"
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "EMPTY" ]
+  [ ! -e "$FAKE_GH_LOG" ]
+}
+
+@test "DIRTY wins over PR_MERGED and remove skips it without --force" {
+  mk_pr_wt
+  squash_merge_pr
+  echo x >> "$ARNESS_ROOT/worktrees/a/pr/X-2/f.txt"
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "DIRTY" ]
+  run "$SCRIPT" remove --source a pr/X-2
+  [ "$status" -eq 13 ]
+  [ -d "$ARNESS_ROOT/worktrees/a/pr/X-2" ]
+}
+
+@test "--no-fetch never asks gh" {
+  mk_pr_wt
+  squash_merge_pr
+  run "$SCRIPT" list --no-fetch
+  [ "$(col pr/X-2 5)" = "EMPTY" ]
+  [ ! -e "$FAKE_GH_LOG" ]
 }
