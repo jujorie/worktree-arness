@@ -17,6 +17,30 @@ cleanup_sandbox() {
   [ -n "${SANDBOX:-}" ] && rm -rf "$(dirname "$SANDBOX")"
 }
 
+# fake_os <uname> [windows-root]: put stubs first in PATH so the scripts take the Windows (Git Bash)
+# path on any machine. `uname -s` prints <uname>; `cygpath -w` echoes its path; `cygpath -m` echoes
+# <windows-root> in place of the sandbox (default: no change); `cmd /c mklink /J <link> <target>`
+# makes a symlink instead of a junction. Every cygpath and cmd call is logged in $FAKE_CALLS.
+fake_os() {
+  local bin="$BATS_TEST_TMPDIR/fakebin"
+  FAKE_CALLS="$BATS_TEST_TMPDIR/calls"
+  mkdir -p "$bin"
+  : > "$FAKE_CALLS"
+  printf '#!/bin/sh\necho "%s"\n' "$1" > "$bin/uname"
+  cat > "$bin/cygpath" <<EOF
+#!/bin/sh
+echo "cygpath \$*" >> "$FAKE_CALLS"
+if [ "\$1" = -m ] && [ "\$2" = "$SANDBOX" ]; then echo "${2:-$SANDBOX}"; else echo "\$2"; fi
+EOF
+  cat > "$bin/cmd" <<EOF
+#!/bin/sh
+echo "cmd \$*" >> "$FAKE_CALLS"
+ln -s "\$5" "\$4"
+EOF
+  chmod +x "$bin/uname" "$bin/cygpath" "$bin/cmd"
+  export PATH="$bin:$PATH"
+}
+
 # Run a provider-less snippet with lib.sh loaded.
 with_lib() {
   bash -c "set -euo pipefail; . '$SANDBOX/scripts/lib.sh'; $1"

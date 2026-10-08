@@ -4,6 +4,36 @@
 log()  { printf '  %s\n' "$*"; }
 warn() { printf '  [warn] %s\n' "$*" >&2; }
 
+# is_windows: true under Git Bash, MSYS2 or Cygwin.
+is_windows() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+  esac
+  return 1
+}
+
+# On Windows, `pwd` gives /c/Users/..., which Windows programs (Claude Code reading the rendered
+# settings) do not understand. C:/Users/... works for both them and the shell.
+if is_windows; then
+  ARNESS_ROOT="$(cygpath -m "$ARNESS_ROOT")"
+  export ARNESS_ROOT
+fi
+
+# make_link <target> <dest>: create the link, <target> relative to the directory of <dest>.
+# On Windows, symlinks need Developer Mode or admin, and without them Git Bash's `ln -s` silently
+# copies. A directory gets a junction instead (no privileges needed, absolute target); anything
+# else gets a native symlink, which fails loudly when not allowed.
+make_link() {
+  local target="$1" dest="$2" abs
+  if is_windows && [ -d "$(dirname "$dest")/$target" ]; then
+    abs="$(cd "$(dirname "$dest")/$target" && pwd)"
+    # MSYS_NO_PATHCONV: otherwise Git Bash rewrites /c and /J as paths.
+    MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$dest")" "$(cygpath -w "$abs")" >/dev/null
+  else
+    MSYS=winsymlinks:nativestrict ln -s "$target" "$dest"
+  fi
+}
+
 # link <target> <link>
 # <target> is relative to the link's directory (as `ln -s` expects).
 # <link> is relative to ARNESS_ROOT. Idempotent; never overwrites user files.
@@ -11,16 +41,16 @@ link() {
   local target="$1" dest="$ARNESS_ROOT/$2"
   mkdir -p "$(dirname "$dest")"
   if [ -L "$dest" ]; then
-    ln -sfn "$target" "$dest"
+    rm "$dest" && make_link "$target" "$dest"   # removes the link (or junction) only
   elif [ -e "$dest" ]; then
     if [ -f "$dest" ] && [ ! -s "$dest" ]; then
-      rm "$dest" && ln -s "$target" "$dest"   # empty placeholder file
+      rm "$dest" && make_link "$target" "$dest"   # empty placeholder file
     else
       warn "$2 exists and is not a symlink, skipping"
       return 0
     fi
   else
-    ln -s "$target" "$dest"
+    make_link "$target" "$dest"
   fi
   log "$2 -> $target"
 }

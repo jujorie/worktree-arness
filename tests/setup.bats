@@ -141,3 +141,13 @@ teardown() { cleanup_sandbox; }
   [ "$(cat "$SANDBOX/opencode.json")" = '{"model":"x"}' ]
   [ "$(cat "$SANDBOX/.memory/MEMORY.md")" = '- [A](a.md) — hook' ]
 }
+
+@test "on windows, claude settings get the C:/ style root and skills a junction" {
+  ln -s "$SANDBOX" "$BATS_TEST_TMPDIR/win-root"
+  fake_os MINGW64_NT-10.0 "$BATS_TEST_TMPDIR/win-root"
+  run bash "$SANDBOX/setup.sh" --provider claude
+  [ "$status" -eq 0 ]
+  grep -qF "\"autoMemoryDirectory\": \"$BATS_TEST_TMPDIR/win-root/.memory\"" "$SANDBOX/.claude/settings.json"
+  grep -q 'mklink /J .*/.claude/skills ' "$FAKE_CALLS"
+  grep -q 'mklink /J .*/.claude/agents ' "$FAKE_CALLS"
+}
