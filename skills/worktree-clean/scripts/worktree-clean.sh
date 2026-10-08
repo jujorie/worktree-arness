@@ -6,8 +6,10 @@
 #
 # list stdout: one tab-separated row per worktree, or NONE (exit 0):
 #   repo  name  branch  base  status  ahead  path
-#   status: MERGED | EMPTY | NOT_MERGED | DIRTY | UNKNOWN_BASE
+#   status: MERGED | PR_MERGED | EMPTY | NOT_MERGED | DIRTY | UNKNOWN_BASE
 #           EMPTY = no commits of its own yet (still where it was created): nothing merged, nothing to lose
+#           PR_MERGED = the branch was deleted in origin and a merged pull request had exactly its tip
+#                       as head (squash and rebase merges included): nothing to lose
 #   ahead:  commits of the branch not in base ("-" if unknown)
 # remove stdout, per NAME (exit 13 if any SKIPPED):
 #   REMOVED <path>
@@ -18,7 +20,10 @@
 # Merge status looks at the base and at its remote side: a worktree is MERGED if its branch is in <base> or
 # in origin/<base> (e.g. merged in origin/develop while the local develop is behind). The remote side is
 # refreshed first with `git fetch origin <branch>`, once per base. If the fetch fails a warning goes to
-# stderr and the local copy is used. --no-fetch skips it (offline).
+# stderr and the local copy is used; if the branch no longer exists in origin, a note says so instead.
+# A branch that is not MERGED is checked for PR_MERGED: `git ls-remote` to see it is gone from origin, then
+# `gh pr list --head <branch> --state merged` (skipped without gh, or when gh fails).
+# --no-fetch skips all network calls (offline).
 # Exit codes: 0 ok, 2 invalid usage/input, 4 no source, 13 some worktree skipped.
 set -euo pipefail
 
@@ -47,6 +52,21 @@ validate_name() {
     [ "$part" = "$rest" ] && return 0
     rest="${rest#*/}"
   done
+}
+
+# True if <branch> is gone from origin and a merged pull request had its current tip as head.
+# Any doubt (origin unreachable, no gh, gh fails, tip moved after the merge) is false. Args: repo_dir branch
+pr_merged() {
+  local repo_dir="$1" branch="$2" tip rc=0 heads
+  git -C "$repo_dir" remote | grep -Fxq origin || return 1
+  command -v gh >/dev/null 2>&1 || return 1
+  # Exit 2 = reachable and the ref is not there; 0 = still there; anything else = unknown.
+  GIT_TERMINAL_PROMPT=0 git -C "$repo_dir" ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || return 1
+  tip="$(git -C "$repo_dir" rev-parse "$branch^{commit}")" || return 1
+  heads="$(cd "$repo_dir" && GH_PROMPT_DISABLED=1 gh pr list --head "$branch" --state merged \
+    --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || return 1
+  printf '%s\n' "$heads" | grep -Fxq "$tip"
 }
 
 # Sets S_BASE, S_AHEAD, S_STATUS for a worktree. Args: repo_dir wt_path branch fallback_base
@@ -80,6 +100,13 @@ compute_status() {
       fi
     fi
   fi
+  # A squash or rebase merge leaves the commits out of the base: ask the forge.
+  case "$S_STATUS" in
+    EMPTY|NOT_MERGED|UNKNOWN_BASE)
+      if [ "$branch" != "-" ] && [ "${NO_FETCH:-0}" -eq 0 ] && pr_merged "$repo_dir" "$branch"; then
+        S_STATUS="PR_MERGED"
+      fi ;;
+  esac
   # Uncommitted work wins over any other status.
   if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then S_STATUS="DIRTY"; fi
 }
@@ -107,7 +134,7 @@ repo_rows() {
 # Refresh the remote side of every base, once each, so merges done in the remote are visible:
 # origin/<branch> bases, and origin/<base> of local bases that origin is known to have.
 prefetch_bases() {
-  local r b br
+  local r b br err
   for r in "${SEL_REPOS[@]}"; do
     git -C "$SOURCE_DIR/$r" remote | grep -Fxq origin || continue
     { git -C "$SOURCE_DIR/$r" config --get-regexp '^branch\..*\.arness-base$' 2>/dev/null | awk '{print $2}'
@@ -121,8 +148,12 @@ prefetch_bases() {
                    br="$b" ;;
       esac
       git check-ref-format "refs/heads/$br" 2>/dev/null || continue
-      GIT_TERMINAL_PROMPT=0 git -C "$SOURCE_DIR/$r" fetch --quiet origin "+refs/heads/$br:refs/remotes/origin/$br" >/dev/null 2>&1 \
-        || echo "warning: could not refresh origin/$br in $r; its merge status may be stale" >&2
+      if ! err="$(GIT_TERMINAL_PROMPT=0 git -C "$SOURCE_DIR/$r" fetch --quiet origin "+refs/heads/$br:refs/remotes/origin/$br" 2>&1)"; then
+        case "$err" in
+          *"couldn't find remote ref"*) echo "note: origin/$br no longer exists in $r (deleted in origin)" >&2 ;;
+          *) echo "warning: could not refresh origin/$br in $r; its merge status may be stale" >&2 ;;
+        esac
+      fi
     done
   done
 }
@@ -151,9 +182,10 @@ cmd_remove() {
     IFS=$'\t' read -r _ _ branch _ status _ f_path <<EOF_ROW
 $row
 EOF_ROW
-    if [ "$status" != "MERGED" ] && [ "$status" != "EMPTY" ] && [ "$FORCE" -eq 0 ]; then
-      echo "SKIPPED $f_path $status"; skipped=1; continue
-    fi
+    case "$status" in
+      MERGED|PR_MERGED|EMPTY) ;;
+      *) if [ "$FORCE" -eq 0 ]; then echo "SKIPPED $f_path $status"; skipped=1; continue; fi ;;
+    esac
 
     if [ "$FORCE" -eq 1 ]; then
       git -C "$repo_dir" worktree remove --force "$f_path" >&2 || { echo "SKIPPED $f_path git-failed"; skipped=1; continue; }
@@ -163,10 +195,15 @@ EOF_ROW
     if [ "$branch" != "-" ]; then
       # -d is the safe delete; it can refuse a branch merged into the base but not into HEAD.
       # Merge into the base was verified above, so -D is safe then; with --force the user asked for it.
+      # PR_MERGED: the tip is the head of a merged pull request, so -D loses nothing either.
       if [ "$status" = "MERGED" ] || [ "$status" = "EMPTY" ]; then
         git -C "$repo_dir" branch -q -d "$branch" >&2 || git -C "$repo_dir" branch -q -D "$branch" >&2
       else
         git -C "$repo_dir" branch -q -D "$branch" >&2
+      fi
+      # Gone from origin: drop its stale remote-tracking ref too.
+      if [ "$status" = "PR_MERGED" ]; then
+        git -C "$repo_dir" update-ref -d "refs/remotes/origin/$branch" >/dev/null 2>&1 || true
       fi
     fi
     git -C "$repo_dir" worktree prune >&2
@@ -185,7 +222,7 @@ main() {
   shift
   case "$cmd" in
     list|remove) ;;
-    -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^set -euo/ { exit } NR > 1' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown command: $cmd" ;;
   esac
   while [ $# -gt 0 ]; do
