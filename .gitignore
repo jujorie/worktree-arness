@@ -3,6 +3,7 @@
 #
 .claude/
 .memory/
+.vscode/
 /CLAUDE.md
 .agents/
 .opencode/
