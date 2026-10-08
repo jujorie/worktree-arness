@@ -44,6 +44,9 @@ setup() {
   TMP="$(cd -P "$TMP" && pwd -P)"
   export ARNESS_ROOT="$TMP/root"
   export npm_config_offline=true npm_config_update_notifier=false
+  # `run` calls a script FINISHED only if it ends within the first second; a slow CI runner takes longer
+  # to start npm. Give it 3 s (a long-running script like `serve` just costs the full wait).
+  export NPM_RUN_QUICK_TENTHS=30
   mkdir -p "$ARNESS_ROOT/source" "$ARNESS_ROOT/worktrees"
   mk_repo a
   mk_wt a feat/x
