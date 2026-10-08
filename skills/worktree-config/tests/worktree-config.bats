@@ -103,6 +103,83 @@ teardown() { rm -rf "$TMP"; }
   [ "$(cat "$(WT a feat/x)/.env.local")" = "A=1" ]
 }
 
+# --- .configignore ---------------------------------------------------------
+
+@test "without .configignore nothing is ignored, dotfiles and .DS_Store included" {
+  cfg a .DS_Store x
+  cfg a .vscode/settings.json '{}'
+  cfg a .claude/settings.json '{}'
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"files=3 install=no" ]]
+  [ -f "$(WT a feat/x)/.DS_Store" ]
+  [ -f "$(WT a feat/x)/.vscode/settings.json" ]
+}
+
+@test ".configignore: names match at any depth, comments and blanks are skipped" {
+  cfg a .configignore $'# junk\n\n.DS_Store\n._*\r\n'
+  cfg a .DS_Store x
+  cfg a src/.DS_Store x
+  cfg a ._ok.txt x
+  cfg a .env 'A=1'
+  cfg a .claude/settings.json '{}'
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"files=2 install=no" ]]
+  [[ "$output" != *".DS_Store"* ]]
+  [ ! -e "$(WT a feat/x)/.DS_Store" ]
+  [ ! -e "$(WT a feat/x)/src/.DS_Store" ]
+  [ ! -e "$(WT a feat/x)/._ok.txt" ]
+  [ ! -e "$(WT a feat/x)/.configignore" ]
+  [ "$(cat "$(WT a feat/x)/.env")" = "A=1" ]
+  [ -f "$(WT a feat/x)/.claude/settings.json" ]
+}
+
+@test ".configignore: a rule with / is anchored to the root of config/<repo>" {
+  cfg a .configignore '.vscode/*'
+  cfg a .vscode/settings.json '{}'
+  cfg a pkg/.vscode/settings.json '{}'
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [ ! -e "$(WT a feat/x)/.vscode" ]
+  [ -f "$(WT a feat/x)/pkg/.vscode/settings.json" ]
+}
+
+@test ".configignore: a folder name ignores it at any depth; trailing / and leading / work" {
+  cfg a .configignore $'.vscode\n/build/\n'
+  cfg a .vscode/settings.json '{}'
+  cfg a pkg/.vscode/settings.json '{}'
+  cfg a build/out.js x
+  cfg a pkg/build/out.js x
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [ ! -e "$(WT a feat/x)/.vscode" ]
+  [ ! -e "$(WT a feat/x)/pkg/.vscode" ]
+  [ ! -e "$(WT a feat/x)/build" ]
+  [ -f "$(WT a feat/x)/pkg/build/out.js" ]
+}
+
+@test "config/.configignore and config/<repo>/.configignore are added together" {
+  mkdir -p "$ARNESS_ROOT/config"
+  printf '%s\n' '*.log' > "$ARNESS_ROOT/config/.configignore"
+  cfg a .configignore '*.tmp'
+  cfg a a.log x
+  cfg a b.tmp x
+  cfg a c.txt x
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"files=1 install=no" ]]
+  [ -f "$(WT a feat/x)/c.txt" ]
+}
+
+@test "the global config/.configignore alone does not make NO_CONFIG go away" {
+  mkdir -p "$ARNESS_ROOT/config"
+  printf '%s\n' '*.log' > "$ARNESS_ROOT/config/.configignore"
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == "NO_CONFIG a" ]]
+}
+
 @test "overwrites existing files and is idempotent" {
   cfg a f.txt new
   run "$SCRIPT" a/feat/x
