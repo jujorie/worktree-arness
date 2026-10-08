@@ -45,6 +45,7 @@ mk_remote_wt_nocommit() {
 
 setup() {
   TMP="$(mktemp -d)"
+  TMP="$(cd -P "$TMP" && pwd -P)"   # the script prints physical paths; /var is a symlink on macOS
   export ARNESS_ROOT="$TMP/root"
   SRC="$ARNESS_ROOT/source"
   mkdir -p "$SRC"
