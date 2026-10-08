@@ -13,6 +13,7 @@ All validation, copying and execution is done by `scripts/worktree-config.sh` (i
 
 What it does:
 - Every file under `config/<repo>/` is copied to the same relative path in the worktree (`config/a/src/test.js` → `worktrees/a/<name>/src/test.js`). Existing files are overwritten.
+- Files matched by `config/.configignore` or `config/<repo>/.configignore` are not copied (see *Ignore file*). Without them nothing is ignored: dotfiles like `.env` or `.claude/` are copied, and so is `.DS_Store`.
 - `config/<repo>/install.sh` is not copied: it runs with cwd = the worktree, after the copy (build, install deps...). Its output goes to `tmp/worktree-config/<repo>/<name>-install.log`, not to the console.
 
 ## Procedure
@@ -33,6 +34,23 @@ What it does:
 | `INSTALL_FAILED <code> <log>` | 7 | Files are copied but `install.sh` failed. The last 20 lines of its output are on stderr; the full log is at `<log>` (read it only if needed). |
 | `SKIPPED <file> <reason>` | 13 | Some files were not copied (symlink, reserved `.git`, conflict). Report each. |
 | error on stderr | 2 | Invalid slug. Show the message. |
+
+## Ignore file
+
+`.configignore` lists what not to copy. Two places, and their rules are added together: `config/.configignore` (all repos) and `config/<repo>/.configignore` (that repo). Neither is copied. Ignored files are skipped without a line in the output. It follows the `.gitignore` idea, in a simpler form. If asked to create or edit one, use exactly this syntax:
+
+- One rule per line. Blank lines and lines starting with `#` are ignored.
+- A rule without `/` is a glob on any name of the path: `.DS_Store` matches it in any folder, `.vscode` matches that folder at any depth and everything in it.
+- A rule with `/` in the middle is a glob on the whole path relative to `config/<repo>/`: `.vscode/*` is only the top-level `.vscode`, `pkg/.vscode/*` only that one. `*` also crosses `/`.
+- A leading `/` is dropped (paths are always from the root); a trailing `/` means everything under it (`build/` = `build/*`).
+- Globs are `*`, `?` and `[abc]`. Not supported: `!` negation, `**`, escapes.
+
+```
+# config/mplus-bob/.configignore
+.DS_Store
+._*
+.vscode/*
+```
 
 ## Rules
 

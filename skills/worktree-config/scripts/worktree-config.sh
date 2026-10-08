@@ -5,6 +5,9 @@
 #
 # Files keep their relative path: config/<repo>/src/a.js -> worktrees/<repo>/<name>/src/a.js.
 # Existing files are overwritten; the file mode is kept.
+# Ignore rules (gitignore-like, see SKILL.md): config/.configignore and config/<repo>/.configignore are
+# added together. Files they match are not copied and not reported. Nothing is ignored without them.
+# The .configignore files themselves are never copied.
 # config/<repo>/install.sh (top level only) is never copied: it runs with `bash`, cwd = the worktree.
 # Its output (stdout+stderr) goes to <arness>/tmp/worktree-config/<repo>/<name>-install.log, never to the
 # console, so a build cannot flood the caller. On failure only the last 20 lines are shown (on stderr).
@@ -61,12 +64,52 @@ check_dest() {
   done
 }
 
+# Append the rules of file $1 to IGNORES: one per line, no blanks, no "#" comments, no CR.
+load_ignore() {
+  local file="$1" line
+  [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in ""|"#"*) continue ;; esac
+    IGNORES+=("$line")
+  done < "$file"
+}
+
+# Return 0 if <rel> matches a rule in IGNORES.
+# A rule with a "/" (not counting a trailing one) is a glob on the whole relative path, "*" crosses "/";
+# a leading "/" is dropped; a trailing "/" means everything under it. Without "/" it is a glob on any
+# single name of the path, so it also ignores a folder with everything in it.
+is_ignored() {
+  local rel="$1" pat rest part
+  for pat in ${IGNORES[@]+"${IGNORES[@]}"}; do
+    case "${pat%/}" in
+      */*)
+        pat="${pat#/}"
+        case "$pat" in */) pat="$pat*" ;; esac
+        # shellcheck disable=SC2254  # the rule is meant as a glob
+        case "$rel" in $pat) return 0 ;; esac
+        ;;
+      *)
+        pat="${pat%/}"; pat="${pat#/}"
+        rest="$rel"
+        while :; do
+          part="${rest%%/*}"
+          # shellcheck disable=SC2254
+          case "$part" in $pat) return 0 ;; esac
+          case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+        done
+        ;;
+    esac
+  done
+  return 1
+}
+
 main() {
   local slug=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --worktree) [ $# -ge 2 ] || die "--worktree needs a value"; slug="$2"; shift 2 ;;
-      -h|--help)  sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      -h|--help)  sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
       -*)         die "unknown option: $1" ;;
       *)          [ -z "$slug" ] || die "only one worktree allowed"; slug="$1"; shift ;;
     esac
@@ -99,6 +142,10 @@ main() {
   local cfg="$root/config/$repo"
   if [ ! -d "$cfg" ] || [ -L "$cfg" ]; then echo "NO_CONFIG $repo"; exit 0; fi
 
+  IGNORES=()
+  load_ignore "$root/config/.configignore"
+  load_ignore "$cfg/.configignore"
+
   local files=() f
   while IFS= read -r f; do files+=("$f"); done < <(find "$cfg" \( -type f -o -type l \) | LC_ALL=C sort)
 
@@ -107,6 +154,8 @@ main() {
   for f in ${files[@]+"${files[@]}"}; do
     rel="${f#"$cfg/"}"
     [ "$rel" != "install.sh" ] || continue
+    [ "$rel" != ".configignore" ] || continue
+    ! is_ignored "$rel" || continue
     if [ -L "$f" ]; then echo "SKIPPED $rel symlink"; skipped=1; continue; fi
     if ! check_dest "$rel"; then echo "SKIPPED $rel $DEST_WHY"; skipped=1; continue; fi
     dest="$WT/$rel"
