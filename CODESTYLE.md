@@ -51,6 +51,7 @@ Each of these has broken a script here that looked fine.
 | Alternation with backslash-pipe in a basic `sed` regex: BSD `sed` does not support it. | `sed -E` (extended regex), where alternation is a plain pipe inside a group. |
 | `sed 's/[áé]/x/'`: in the C locale a multibyte class matches single bytes. | One literal substitution per character (`s/á/a/g; s/é/e/g`). |
 | `cmd > f.tmp && mv f.tmp f`: when `cmd` fails, `f.tmp` is left behind. | `trap 'rm -f "$tmp"' EXIT`, or remove it in the failure branch. |
+| Judging a bats run by `bats … \| tail -n N`: a `not ok` above the last lines goes unseen and the run looks green. | `bats … \| grep -c '^not ok'` (must be 0), or read the exit code. |
 
 ## Skills
 
