@@ -19,7 +19,7 @@
 #
 # Stdout, first word is the status:
 #   STARTED <repo>/<name> <script> <pid> <log>     running in the background
-#   FINISHED <repo>/<name> <script> <code> <log>   ended within the first second (exit 0 only if code 0)
+#   FINISHED <repo>/<name> <script> <code> <log>   ended within the first second (exit 0 only if code 0); NPM_RUN_QUICK_TENTHS changes it
 #   INSTALLED <repo>/<name> <log>                  dependencies installed (before STARTED)
 #   SCRIPT <name>                                  one per available script (scripts, NO_COMMAND,
 #                                                  UNKNOWN_SCRIPT)
@@ -217,8 +217,9 @@ cmd_run() {
   echo "$pid" > "$pid_file"
 
   # A script that fails at once (missing binary, syntax error) is reported here, not as STARTED.
-  local rc=0
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  local rc=0 tenths="${NPM_RUN_QUICK_TENTHS:-10}"
+  case "$tenths" in ""|*[!0-9]*) tenths=10 ;; esac
+  for _ in $(seq "$tenths"); do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
   done
