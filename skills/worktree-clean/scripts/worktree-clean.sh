@@ -12,9 +12,13 @@
 #                       as head (squash and rebase merges included): nothing to lose
 #   ahead:  commits of the branch not in base ("-" if unknown)
 # remove stdout, per NAME (exit 13 if any SKIPPED):
+#   STOPPED <repo>/<name> <script> <pid>   an npm script npm-run started there, stopped before removing it
 #   REMOVED <path>
-#   SKIPPED <path|name> <reason>   reason: invalid-name | not-a-worktree | git-failed |
+#   SKIPPED <path|name> <reason>   reason: invalid-name | not-a-worktree | git-failed | stop-failed |
 #                                  NOT_MERGED | DIRTY | UNKNOWN_BASE (these three need --force)
+# Before a worktree is removed, the npm scripts npm-run started in it (dev servers, watchers) are stopped
+# with `npm-run.sh stop --worktree <repo>/<name>`: once its folder is gone they would keep running and
+# holding their ports. If that stop fails the worktree is kept (stop-failed).
 # The base of a worktree is read from git config branch.<name>.arness-base (set by worktree-create);
 # --base is the fallback when it is missing.
 # Merge status looks at the base and at its remote side: a worktree is MERGED if its branch is in <base> or
@@ -67,6 +71,22 @@ pr_merged() {
   heads="$(cd "$repo_dir" && GH_PROMPT_DISABLED=1 gh pr list --head "$branch" --state merged \
     --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || return 1
   printf '%s\n' "$heads" | grep -Fxq "$tip"
+}
+
+# Stop what npm-run started in worktree <repo>/<name> and pass its STOPPED lines on. Nothing to do when
+# npm-run has no state for it. Args: slug
+stop_npm_scripts() {
+  local slug="$1" npm_run="$ROOT/skills/npm-run/scripts/npm-run.sh" out
+  [ -d "$ROOT/tmp/npm-run/$slug" ] || return 0
+  if [ ! -x "$npm_run" ]; then
+    echo "warning: npm-run not found; cannot stop the npm scripts of $slug" >&2
+    return 1
+  fi
+  if ! out="$(ARNESS_ROOT="$ROOT" "$npm_run" stop --worktree "$slug")"; then
+    echo "warning: npm-run stop failed for $slug: $out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep '^STOPPED ' || true
 }
 
 # Sets S_BASE, S_AHEAD, S_STATUS for a worktree. Args: repo_dir wt_path branch fallback_base
@@ -186,6 +206,7 @@ EOF_ROW
       MERGED|PR_MERGED|EMPTY) ;;
       *) if [ "$FORCE" -eq 0 ]; then echo "SKIPPED $f_path $status"; skipped=1; continue; fi ;;
     esac
+    stop_npm_scripts "$repo/$name" || { echo "SKIPPED $f_path stop-failed"; skipped=1; continue; }
 
     if [ "$FORCE" -eq 1 ]; then
       git -C "$repo_dir" worktree remove --force "$f_path" >&2 || { echo "SKIPPED $f_path git-failed"; skipped=1; continue; }
@@ -243,7 +264,7 @@ main() {
   root="$(resolve_root)"
   # Physical paths: git reports them, so prefixes must match.
   root="$(cd -P "$root" && pwd -P)"
-  SOURCE_DIR="$root/source" WT_DIR="$root/worktrees"
+  ROOT="$root" SOURCE_DIR="$root/source" WT_DIR="$root/worktrees"
 
   local repos=() d
   for d in "$SOURCE_DIR"/*/; do
