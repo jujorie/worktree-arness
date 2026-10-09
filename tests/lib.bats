@@ -104,3 +104,44 @@ teardown() { cleanup_sandbox; }
   after=$(ls "${TMPDIR:-/tmp}" | wc -l)
   [ "$after" -le "$before" ]
 }
+
+@test "on windows, lib turns ARNESS_ROOT into a C:/ style path" {
+  ln -s "$SANDBOX" "$BATS_TEST_TMPDIR/win-root"
+  fake_os MINGW64_NT-10.0 "$BATS_TEST_TMPDIR/win-root"
+  run with_lib 'echo "$ARNESS_ROOT"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$BATS_TEST_TMPDIR/win-root" ]
+}
+
+@test "on windows, link makes a junction to the absolute directory" {
+  fake_os MINGW64_NT-10.0
+  run with_lib 'link ../skills .claude/skills'
+  [ "$status" -eq 0 ]
+  grep -qxF "cmd /c mklink /J $SANDBOX/.claude/skills $SANDBOX/skills" "$FAKE_CALLS"
+  [ -d "$SANDBOX/.claude/skills" ]
+}
+
+@test "on windows, link repoints an existing junction" {
+  fake_os MSYS_NT-10.0
+  with_lib 'link ../skills .claude/skills'
+  run with_lib 'link ../skills .claude/skills'
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'mklink /J' "$FAKE_CALLS")" -eq 2 ]
+  [ -L "$SANDBOX/.claude/skills" ] && [ -d "$SANDBOX/.claude/skills" ]
+}
+
+@test "on windows, link to a file makes a symlink, not a junction" {
+  fake_os CYGWIN_NT-10.0
+  run with_lib 'link providers/claude/CLAUDE.md CLAUDE.md'
+  [ "$status" -eq 0 ]
+  ! grep -q mklink "$FAKE_CALLS"
+  [ -L "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "outside windows, lib never calls cygpath or cmd" {
+  fake_os Linux
+  run with_lib 'link ../skills .claude/skills'
+  [ "$status" -eq 0 ]
+  [ ! -s "$FAKE_CALLS" ]
+  [ "$(readlink "$SANDBOX/.claude/skills")" = "../skills" ]
+}

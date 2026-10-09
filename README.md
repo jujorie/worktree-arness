@@ -5,6 +5,7 @@ Shared agent configuration (skills, agents, instructions) for Claude Code, Codex
 ## Setup
 
 Works on macOS and Linux/WSL. On WSL, keep the repo in the Linux filesystem (`~/src/...`), not under `/mnt/c`.
+On Windows, run it from Git Bash: the links are directory junctions (no Developer Mode or admin needed) and the rendered paths are `C:/...`, so native Windows tools understand them.
 
 ```bash
 ./setup.sh --provider claude          # required; or codex, opencode
