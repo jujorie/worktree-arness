@@ -527,3 +527,85 @@ squash_merge_pr() {
   [ "$(col pr/X-2 5)" = "EMPTY" ]
   [ ! -e "$FAKE_GH_LOG" ]
 }
+
+# Fake npm-run in the throwaway root: logs its args and whether the worktree still exists, prints
+# $FAKE_NPM_RUN_OUT and exits with $FAKE_NPM_RUN_EXIT.
+mk_fake_npm_run() {
+  mkdir -p "$ARNESS_ROOT/skills/npm-run/scripts"
+  cat > "$ARNESS_ROOT/skills/npm-run/scripts/npm-run.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ -d "$ARNESS_ROOT/worktrees/$3" ]; then wt=exists; else wt=gone; fi
+echo "$* $wt" >> "$FAKE_NPM_RUN_LOG"
+printf '%s\n' "${FAKE_NPM_RUN_OUT:-NONE}"
+exit "${FAKE_NPM_RUN_EXIT:-0}"
+EOF
+  chmod +x "$ARNESS_ROOT/skills/npm-run/scripts/npm-run.sh"
+  export FAKE_NPM_RUN_LOG="$TMP/npm-run.log"
+}
+
+# mk_npm_state <repo>/<name>: npm-run state for a worktree, as if it had started a script there.
+mk_npm_state() {
+  mkdir -p "$ARNESS_ROOT/tmp/npm-run/$1"
+  echo 1 > "$ARNESS_ROOT/tmp/npm-run/$1/start.pid"
+}
+
+@test "remove stops the npm scripts of the worktree before removing it" {
+  mk_repo a
+  mk_wt a feat/x commit
+  merge_wt a feat/x
+  mk_fake_npm_run
+  mk_npm_state a/feat/x
+  FAKE_NPM_RUN_OUT="STOPPED a/feat/x start 123" run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "STOPPED a/feat/x start 123" ]
+  [[ "${lines[1]}" == REMOVED*/worktrees/a/feat/x ]]
+  [ "$(cat "$FAKE_NPM_RUN_LOG")" = "stop --worktree a/feat/x exists" ]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/feat/x" ]
+}
+
+@test "remove does not call npm-run when it has no state for the worktree" {
+  mk_repo a
+  mk_wt a done commit
+  merge_wt a done
+  mk_fake_npm_run
+  mk_npm_state a/other
+  run "$SCRIPT" remove --source a done
+  [ "$status" -eq 0 ]
+  [[ "$output" == REMOVED*/worktrees/a/done ]]
+  [ ! -e "$FAKE_NPM_RUN_LOG" ]
+}
+
+@test "remove keeps the worktree when stopping its npm scripts fails" {
+  mk_repo a
+  mk_wt a done commit
+  merge_wt a done
+  mk_fake_npm_run
+  mk_npm_state a/done
+  FAKE_NPM_RUN_OUT="NO_NPM" FAKE_NPM_RUN_EXIT=3 run "$SCRIPT" remove --source a done
+  [ "$status" -eq 13 ]
+  [[ "$output" == *SKIPPED*/worktrees/a/done\ stop-failed ]]
+  [ -d "$ARNESS_ROOT/worktrees/a/done" ]
+  [ -n "$(git -C "$SRC/a" branch --list done)" ]
+}
+
+@test "remove keeps the worktree when npm-run is missing but has state for it" {
+  mk_repo a
+  mk_wt a done commit
+  merge_wt a done
+  mk_npm_state a/done
+  run "$SCRIPT" remove --source a done
+  [ "$status" -eq 13 ]
+  [[ "$output" == *SKIPPED*/worktrees/a/done\ stop-failed ]]
+  [ -d "$ARNESS_ROOT/worktrees/a/done" ]
+}
+
+@test "a worktree skipped for its status keeps its npm scripts running" {
+  mk_repo a
+  mk_wt a open commit
+  mk_fake_npm_run
+  mk_npm_state a/open
+  run "$SCRIPT" remove --source a open
+  [ "$status" -eq 13 ]
+  [[ "$output" == SKIPPED*/worktrees/a/open\ NOT_MERGED ]]
+  [ ! -e "$FAKE_NPM_RUN_LOG" ]
+}
