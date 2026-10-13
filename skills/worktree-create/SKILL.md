@@ -11,7 +11,7 @@ allowed-tools: Bash(skills/worktree-create/scripts/worktree-create.sh *)
 Creates `worktrees/<repo>/<name>` with a new branch `<name>`. `<name>` may contain `/` (e.g. `feat/PROJ-123` → `worktrees/<repo>/feat/PROJ-123`); each part must be a valid file name, taken from a repo in `source/`.
 All validation and creation is done by `scripts/worktree-create.sh` (in this skill's folder). Do not run `git worktree` yourself.
 
-**Detached mode** (`--detach`): to look at an existing branch as it is, with no branch of its own (e.g. "monta la rama release/1.2", "quiero ver si el bug ya estaba en release/1.2"). The worktree is checked out in detached HEAD at that branch: nothing is created in git, nothing is tracked. Its name defaults to the branch without `origin/` (`origin/release/1.2` → `worktrees/<repo>/release/1.2`).
+**Detached mode** (`--detach`): to look at an existing branch as it is, with no branch of its own (e.g. "monta la rama release/1.2", "quiero ver si el bug ya estaba en release/1.2"). The worktree is checked out in detached HEAD at that branch: no branch is created, nothing is tracked. Its name defaults to the branch without `origin/` (`origin/release/1.2` → `worktrees/<repo>/release/1.2`).
 
 ## Procedure
 
@@ -43,7 +43,7 @@ Always keep the same `--source`/`--name`/`--detach` when rerunning after a quest
 
 After creating, the script applies `config/<repo>/` to the new worktree by itself (copy + `install.sh`), using the `worktree-config` script. Pass `--no-config` only if the user asks not to.
 
-The new branch is set to track `origin/<name>` (config only, **nothing is pushed**): the first `git push` in the worktree creates it in origin. Do not push for the user unless asked. A `--detach` worktree has no branch, so nothing is tracked or recorded.
+The new branch is set to track `origin/<name>` (config only, **nothing is pushed**): the first `git push` in the worktree creates it in origin. Do not push for the user unless asked. A `--detach` worktree has no branch, so nothing is tracked; only the ref it shows is recorded (`git config arness-worktree.<name>.base`), so `worktree-clean` can show where it comes from.
 
 ## Rules
 
