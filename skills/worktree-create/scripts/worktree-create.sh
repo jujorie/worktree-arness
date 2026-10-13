@@ -10,7 +10,8 @@
 # Stdout (machine readable), first word is the status:
 #   CREATED <path> <base>        done; new branch NAME created from <base> (NAME may contain /, e.g. feat/X-1)
 #   CREATED <path> <base> detached
-#                                done with --detach; no branch created, HEAD detached at <base>
+#                                done with --detach; no branch created, HEAD detached at <base>, which is
+#                                recorded as git config arness-worktree.<name>.base for worktree-clean
 #   CHOOSE_SOURCE <repo>...      several repos and no --source; ask the user (exit 10)
 #   CONFIRM_BRANCH <branch> [behind=<n>]
 #                                current branch of the source; confirm it, rerun with --branch (exit 11).
@@ -103,7 +104,7 @@ main() {
       --no-confirm) no_confirm=1; shift ;;
       --no-config)  no_config=1; shift ;;
       --no-fetch)   no_fetch=1; NO_FETCH=1; shift ;;
-      -h|--help)    sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      -h|--help)    sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
       *)            die "unknown argument: $1" ;;
     esac
   done
@@ -171,11 +172,13 @@ main() {
   done
   mkdir -p "$(dirname "$dest")"
   if [ "$detach" -eq 1 ]; then
-    # No branch, so no tracking or recorded base: worktree-clean tells it apart by its detached HEAD.
+    # No branch, so no tracking. The ref it shows is kept per worktree name, so worktree-clean can say what
+    # it is (e.g. origin/release/1.2) once that ref has moved on.
     if ! git -C "$repo" worktree add --quiet --detach "$dest" "$branch" >&2; then
       echo "error: git worktree add failed" >&2
       exit "$EXIT_GIT"
     fi
+    git -C "$repo" config "arness-worktree.$name.base" "$branch"
     echo "CREATED $dest $branch detached"
   else
     if ! git -C "$repo" worktree add --quiet -b "$name" "$dest" "$branch" >&2; then

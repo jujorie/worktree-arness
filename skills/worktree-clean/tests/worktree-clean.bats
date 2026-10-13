@@ -612,25 +612,57 @@ mk_npm_state() {
 
 # --- detached worktrees (worktree-create --detach) ----------------------------
 
-@test "a fresh detached worktree is EMPTY with no branch or base" {
+# mk_detached <repo> <name> <ref> : detached worktree with its ref recorded, like worktree-create --detach.
+mk_detached() {
+  git_q -C "$SRC/$1" worktree add -q --detach "$ARNESS_ROOT/worktrees/$1/$2" "$3"
+  git_q -C "$SRC/$1" config "arness-worktree.$2.base" "$3"
+}
+
+@test "a fresh detached worktree is EMPTY, marked (detached) with the ref it shows as base" {
   mk_repo a
-  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/release/1.0" main
+  git_q -C "$SRC/a" branch release/1.0
+  mk_detached a release/1.0 release/1.0
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
-  [ "$(col release/1.0 3)" = "-" ]
-  [ "$(col release/1.0 4)" = "-" ]
+  [ "$(col release/1.0 3)" = "(detached)" ]
+  [ "$(col release/1.0 4)" = "release/1.0" ]
   [ "$(col release/1.0 5)" = "EMPTY" ]
   [ "$(col release/1.0 6)" = "0" ]
 }
 
-@test "remove deletes a detached EMPTY worktree without --force and keeps every branch" {
+@test "the recorded ref is still shown after that branch moves on" {
   mk_repo a
-  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/release/1.0" main
+  git_q -C "$SRC/a" branch release/1.0
+  mk_detached a release/1.0 release/1.0
+  git_q -C "$SRC/a" checkout -q release/1.0
+  echo 2 > "$SRC/a/g.txt"; git_q -C "$SRC/a" add g.txt; git_q -C "$SRC/a" commit -q -m c2
+  run "$SCRIPT" list
+  [ "$(col release/1.0 4)" = "release/1.0" ]
+  [ "$(col release/1.0 5)" = "EMPTY" ]
+}
+
+@test "without a recorded ref, a detached worktree shows a branch at its HEAD, or -" {
+  mk_repo a
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/at-main" main
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/old" main
+  echo 2 > "$SRC/a/g.txt"; git_q -C "$SRC/a" add g.txt; git_q -C "$SRC/a" commit -q -m c2
+  git_q -C "$ARNESS_ROOT/worktrees/a/at-main" checkout -q --detach main
+  run "$SCRIPT" list
+  [ "$(col at-main 4)" = "main" ]
+  [ "$(col old 4)" = "-" ]
+  [ "$(col old 5)" = "EMPTY" ]
+}
+
+@test "remove deletes a detached EMPTY worktree without --force, keeps every branch and drops its record" {
+  mk_repo a
+  git_q -C "$SRC/a" branch release/1.0
+  mk_detached a release/1.0 release/1.0
   run "$SCRIPT" remove --source a release/1.0
   [ "$status" -eq 0 ]
   [ "$output" = "REMOVED $ARNESS_ROOT/worktrees/a/release/1.0" ]
   [ ! -e "$ARNESS_ROOT/worktrees/a/release" ]
-  [ "$(git -C "$SRC/a" branch --format='%(refname:short)')" = "main" ]
+  [ "$(git -C "$SRC/a" branch --format='%(refname:short)' | tr '\n' ' ')" = "main release/1.0 " ]
+  [ -z "$(git -C "$SRC/a" config --get-regexp '^arness-worktree\.' || true)" ]
 }
 
 @test "commits made on a detached HEAD make it NOT_MERGED and remove needs --force" {

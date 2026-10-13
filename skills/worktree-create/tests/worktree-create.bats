@@ -426,7 +426,7 @@ origin_commit() {
   [ "$(git -C "$ARNESS_ROOT/worktrees/a/epic/X-1" rev-parse HEAD)" = "$(git -C "$ORIGIN" rev-parse epic/X-1)" ]
 }
 
-@test "--detach creates no branch, tracking or recorded base" {
+@test "--detach creates no branch or tracking, and records the ref it shows" {
   mk_clone a
   branches_before="$(git -C "$SRC/a" branch --list)"
   run "$SCRIPT" --detach --branch epic/X-1
@@ -434,6 +434,7 @@ origin_commit() {
   [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/epic/X-1 origin/epic/X-1 detached" ]
   [ "$(git -C "$SRC/a" branch --list)" = "$branches_before" ]
   [ -z "$(git -C "$SRC/a" config --get-regexp '^branch\.epic/X-1\.' || true)" ]
+  [ "$(git -C "$SRC/a" config --get arness-worktree.epic/X-1.base)" = "origin/epic/X-1" ]
 }
 
 @test "--detach takes --name when given" {

@@ -20,13 +20,13 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
    - `NONE`: tell the user there is nothing to clean. Done.
    - `NO_SOURCE` (exit 4): no repo in `source/`. Done.
    - Otherwise one tab-separated row per worktree: `repo name branch base status ahead path`.
-2. Show a numbered markdown table: `#`, repo, name, base, status, ahead. Status meaning:
+2. Show a numbered markdown table: `#`, repo, name, base, status, ahead. When branch is `(detached)`, write the base as `detached: <base>` (e.g. `detached: origin/release/1.2`), so it reads as a branch checked out to look at, not a task. Status meaning:
    - `EMPTY`: the branch has no commits of its own yet (a worktree just created). Nothing was merged and nothing is lost, but it is **not** "merged": never describe it as merged.
    - `MERGED`: branch is in its base, or in `origin/<base>` (merged in the remote while the local base is behind). Safe to remove.
    - `PR_MERGED`: the branch was deleted in origin and a merged pull request had exactly the local tip as head (squash or rebase merges included; typical of someone else's PR checked out to test it). Safe to remove.
    - `NOT_MERGED`: has `ahead` commits not in base. Removing loses them.
    - `DIRTY`: uncommitted changes. Removing loses them, even if the PR was merged: name the changed files (`git -C <path> status --short`).
-   - Detached worktree (`worktree-create --detach`, branch and base `-`): `EMPTY` while it has no commits that no branch, remote branch or tag holds; otherwise `NOT_MERGED` with those commits as `ahead`. Removing it never deletes a branch.
+   - Detached worktree (`worktree-create --detach`, branch `(detached)`, base the ref it was checked out from, or `-` if unknown): `EMPTY` while it has no commits that no branch, remote branch or tag holds; otherwise `NOT_MERGED` with those commits as `ahead`. Removing it never deletes a branch.
    - `UNKNOWN_BASE`: base not recorded (worktree not made by `worktree-create`). Ask the user for the base branch and rerun `list --base <ref>`, or treat it like `NOT_MERGED`.
    - Note: squash or rebase merges are detected only through `gh` (`PR_MERGED`); without `gh`, or with `--no-fetch`, they show as `NOT_MERGED` or `EMPTY`.
    - The remote side of each base (`origin/<branch>`, or `origin/<base>` for a local base) is refreshed first (one `git fetch` per base). If the fetch fails a `warning:` appears on stderr and the status may be stale: tell the user. A `note: origin/<branch> no longer exists` is not a failure: the branch was deleted in origin (usually after its PR merged). Offline: add `--no-fetch`.
