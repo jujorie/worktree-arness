@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Create a git worktree from a repo cloned in <arness>/source/ into <arness>/worktrees/<repo>/<name>.
 #
-# Usage: worktree-create.sh [--source REPO] [--name NAME] [--branch REF] [--no-confirm] [--no-config] [--no-fetch]
+# Usage: worktree-create.sh [--source REPO] [--name NAME] [--branch REF] [--detach] [--no-confirm] [--no-config]
+#                           [--no-fetch]
+#
+# --detach: check out <base> as it is, in detached HEAD, without creating a branch (e.g. to try a release).
+#           NAME defaults to --branch without its "origin/" prefix (origin/release/1.2 -> release/1.2).
 #
 # Stdout (machine readable), first word is the status:
 #   CREATED <path> <base>        done; new branch NAME created from <base> (NAME may contain /, e.g. feat/X-1)
+#   CREATED <path> <base> detached
+#                                done with --detach; no branch created, HEAD detached at <base>
 #   CHOOSE_SOURCE <repo>...      several repos and no --source; ask the user (exit 10)
 #   CONFIRM_BRANCH <branch> [behind=<n>]
 #                                current branch of the source; confirm it, rerun with --branch (exit 11).
@@ -12,7 +18,7 @@
 #                                fetch of that branch); absent if unknown (no origin, local-only branch, offline)
 #   EXISTS <path>                destination exists; nothing changed (exit 12)
 #   NO_SOURCE                    no repo in source/ or --source is not one of them (exit 4)
-#   NO_NAME                      --name missing or empty (exit 5)
+#   NO_NAME                      --name missing or empty, and not --detach with --branch (exit 5)
 # After CREATED, if config/<repo>/ exists, the worktree-config script runs on the new worktree (skip with
 # --no-config). Its output follows as lines prefixed with "CONFIG " (COPIED/SKIPPED/DONE/INSTALL_FAILED...).
 # If it fails, "CONFIG_FAILED <code>" is printed and the exit code is 14; the worktree stays created.
@@ -86,17 +92,18 @@ behind_count() {
 }
 
 main() {
-  local source="" name="" branch="" no_confirm=0 no_config=0 no_fetch=0
+  local source="" name="" branch="" detach=0 no_confirm=0 no_config=0 no_fetch=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --source)     [ $# -ge 2 ] || die "--source needs a value"; source="$2"; shift 2 ;;
       --name)       [ $# -ge 2 ] || die "--name needs a value"; name="$2"; shift 2 ;;
       --branch)     [ $# -ge 2 ] || die "--branch needs a value"; branch="$2"; shift 2 ;;
+      --detach)     detach=1; shift ;;
       --no-confirm) no_confirm=1; shift ;;
       --no-config)  no_config=1; shift ;;
       --no-fetch)   no_fetch=1; NO_FETCH=1; shift ;;
-      -h|--help)    sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      -h|--help)    sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
       *)            die "unknown argument: $1" ;;
     esac
   done
@@ -126,10 +133,13 @@ main() {
   fi
   local repo="$source_dir/$source"
 
-  # 2. Worktree name.
+  # 2. Worktree name. A detached worktree is named after the branch it shows, so it needs no name of its own.
+  if [ -z "$name" ] && [ "$detach" -eq 1 ]; then name="${branch#origin/}"; fi
   if [ -z "$name" ]; then echo "NO_NAME"; exit "$EXIT_NO_NAME"; fi
   validate_name "$name" || die "invalid name: '$name' (use letters, digits, . _ - and / between parts)"
-  git check-ref-format --branch "$name" >/dev/null 2>&1 || die "invalid branch name: '$name'"
+  if [ "$detach" -eq 0 ]; then
+    git check-ref-format --branch "$name" >/dev/null 2>&1 || die "invalid branch name: '$name'"
+  fi
 
   # 3. Base branch: confirm the source's current branch unless told not to.
   if [ -z "$branch" ]; then
@@ -160,19 +170,28 @@ main() {
     walk="$walk/$part"
   done
   mkdir -p "$(dirname "$dest")"
-  if ! git -C "$repo" worktree add --quiet -b "$name" "$dest" "$branch" >&2; then
-    echo "error: git worktree add failed" >&2
-    exit "$EXIT_GIT"
+  if [ "$detach" -eq 1 ]; then
+    # No branch, so no tracking or recorded base: worktree-clean tells it apart by its detached HEAD.
+    if ! git -C "$repo" worktree add --quiet --detach "$dest" "$branch" >&2; then
+      echo "error: git worktree add failed" >&2
+      exit "$EXIT_GIT"
+    fi
+    echo "CREATED $dest $branch detached"
+  else
+    if ! git -C "$repo" worktree add --quiet -b "$name" "$dest" "$branch" >&2; then
+      echo "error: git worktree add failed" >&2
+      exit "$EXIT_GIT"
+    fi
+    # Track origin/<name>, not the base: when the base is origin/<x> git sets that as upstream, so pull/push would
+    # target the base branch. This only writes config (nothing is pushed); the first `git push` creates the branch.
+    if git -C "$repo" remote | grep -Fxq origin; then
+      git -C "$repo" config "branch.$name.remote" origin
+      git -C "$repo" config "branch.$name.merge" "refs/heads/$name"
+    fi
+    # Remember the base: git does not, and worktree-clean needs it to tell if the branch was merged.
+    if [ "$branch" != "HEAD" ]; then git -C "$repo" config "branch.$name.arness-base" "$branch"; fi
+    echo "CREATED $dest $branch"
   fi
-  # Track origin/<name>, not the base: when the base is origin/<x> git sets that as upstream, so pull/push would
-  # target the base branch. This only writes config (nothing is pushed); the first `git push` creates the branch.
-  if git -C "$repo" remote | grep -Fxq origin; then
-    git -C "$repo" config "branch.$name.remote" origin
-    git -C "$repo" config "branch.$name.merge" "refs/heads/$name"
-  fi
-  # Remember the base: git does not, and worktree-clean needs it to tell if the branch was merged.
-  if [ "$branch" != "HEAD" ]; then git -C "$repo" config "branch.$name.arness-base" "$branch"; fi
-  echo "CREATED $dest $branch"
 
   # Copy config/<repo>/** into the new worktree and run its install.sh (worktree-config skill).
   if [ "$no_config" -eq 0 ] && [ -d "$root/config/$source" ]; then

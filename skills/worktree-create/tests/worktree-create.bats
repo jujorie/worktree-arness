@@ -413,3 +413,80 @@ origin_commit() {
   [ "$status" -eq 0 ]
   [ -z "$(git -C "$SRC/a" config --get branch.w.remote || true)" ]
 }
+
+# --- --detach: check out a branch as it is, without a branch of its own -----
+
+@test "--detach names the worktree after the branch and leaves HEAD detached at it" {
+  mk_clone a
+  run "$SCRIPT" --detach --branch origin/epic/X-1
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/epic/X-1 origin/epic/X-1 detached" ]
+  [ -f "$ARNESS_ROOT/worktrees/a/epic/X-1/g.txt" ]
+  [ "$(git -C "$ARNESS_ROOT/worktrees/a/epic/X-1" rev-parse --abbrev-ref HEAD)" = "HEAD" ]
+  [ "$(git -C "$ARNESS_ROOT/worktrees/a/epic/X-1" rev-parse HEAD)" = "$(git -C "$ORIGIN" rev-parse epic/X-1)" ]
+}
+
+@test "--detach creates no branch, tracking or recorded base" {
+  mk_clone a
+  branches_before="$(git -C "$SRC/a" branch --list)"
+  run "$SCRIPT" --detach --branch epic/X-1
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/epic/X-1 origin/epic/X-1 detached" ]
+  [ "$(git -C "$SRC/a" branch --list)" = "$branches_before" ]
+  [ -z "$(git -C "$SRC/a" config --get-regexp '^branch\.epic/X-1\.' || true)" ]
+}
+
+@test "--detach takes --name when given" {
+  mk_clone a
+  run "$SCRIPT" --detach --branch origin/epic/X-1 --name check/old
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/check/old origin/epic/X-1 detached" ]
+}
+
+@test "--detach works on a branch checked out in the source" {
+  mk_repo a
+  git_q -C "$SRC/a" checkout -q -b release/1.0
+  run "$SCRIPT" --detach --branch release/1.0
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/release/1.0 release/1.0 detached" ]
+  [ "$(git -C "$SRC/a" rev-parse --abbrev-ref HEAD)" = "release/1.0" ]
+}
+
+@test "--detach without --branch or --name is NO_NAME" {
+  mk_repo a
+  run "$SCRIPT" --detach
+  [ "$status" -eq 5 ]
+  [ "$output" = "NO_NAME" ]
+}
+
+@test "--detach with --name but no --branch still asks to confirm the branch" {
+  mk_repo a
+  run "$SCRIPT" --detach --name w
+  [ "$status" -eq 11 ]
+  [ "$output" = "CONFIRM_BRANCH main" ]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/w" ]
+}
+
+@test "--detach on a missing branch is an error and creates nothing" {
+  mk_clone a
+  run "$SCRIPT" --detach --branch origin/epic/NOPE
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"branch not found"* ]]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/epic/NOPE" ]
+}
+
+@test "--detach twice on the same branch gives EXISTS" {
+  mk_clone a
+  run "$SCRIPT" --detach --branch origin/epic/X-1
+  [ "$status" -eq 0 ]
+  run "$SCRIPT" --detach --branch origin/epic/X-1
+  [ "$status" -eq 12 ]
+  [ "$output" = "EXISTS $ARNESS_ROOT/worktrees/a/epic/X-1" ]
+}
+
+@test "--detach with an unsafe branch name is rejected" {
+  mk_repo a
+  run "$SCRIPT" --detach --branch ../x
+  [ "$status" -eq 2 ]
+  [ ! -e "$ARNESS_ROOT/worktrees/x" ]
+}

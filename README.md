@@ -48,7 +48,7 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | Skill | Purpose |
 |---|---|
 | `repo-clone` | Clone a repo URL into `source/`; asks before overwriting or offers a copy under another name |
-| `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; fails with `NO_SOURCE` / `NO_NAME` |
+| `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; `--detach` checks out an existing branch as it is (e.g. a release); fails with `NO_SOURCE` / `NO_NAME` |
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
 | `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies); list, stop and clean up after them |

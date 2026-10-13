@@ -15,6 +15,7 @@ worktrees/<repo>/<name>/
 | Need | Skill | What it does |
 |---|---|---|
 | New worktree | `worktree-create` | Creates the worktree and branch from `source/<repo>`, confirming the base branch. Then applies `config/<repo>/` (see below) |
+| Look at an existing branch | `worktree-create` (detached) | Checks out a branch as it is, e.g. `release/1.2` → `worktrees/<repo>/release/1.2`, in detached HEAD: no branch is created. Then applies `config/<repo>/` |
 | Re-apply local config | `worktree-config <repo>/<name>` | Copies `config/<repo>/**` into the worktree and runs `config/<repo>/install.sh` there |
 | Clean up | `worktree-clean` | Lists worktrees with their merge status (`MERGED`, `EMPTY` = no commits yet, `NOT_MERGED`, `DIRTY`, `UNKNOWN_BASE`) and removes the ones you choose, with their branch |
 

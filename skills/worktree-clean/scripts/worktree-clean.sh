@@ -11,6 +11,8 @@
 #           PR_MERGED = the branch was deleted in origin and a merged pull request had exactly its tip
 #                       as head (squash and rebase merges included): nothing to lose
 #   ahead:  commits of the branch not in base ("-" if unknown)
+#   branch and base are "-" for a detached worktree (worktree-create --detach): it is EMPTY, or NOT_MERGED
+#   with ahead = commits on its HEAD that no branch, remote branch or tag holds (lost on removal)
 # remove stdout, per NAME (exit 13 if any SKIPPED):
 #   STOPPED <repo>/<name> <script> <pid>   an npm script npm-run started there, stopped before removing it
 #   REMOVED <path>
@@ -98,7 +100,13 @@ compute_status() {
   fi
   if [ -z "$base" ]; then base="$fallback"; fi
   if [ -n "$base" ]; then S_BASE="$base"; fi
-  if [ "$branch" != "-" ] && [ -n "$base" ] && git -C "$repo_dir" rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+  if [ "$branch" = "-" ] && git -C "$path" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null; then
+    # Detached HEAD (worktree-create --detach): no branch to merge. It only loses commits made on it that no
+    # branch, remote branch or tag holds.
+    S_BASE="-"
+    S_AHEAD="$(git -C "$path" rev-list --count HEAD --not --branches --remotes --tags)"
+    if [ "$S_AHEAD" -eq 0 ]; then S_STATUS="EMPTY"; else S_STATUS="NOT_MERGED"; fi
+  elif [ "$branch" != "-" ] && [ -n "$base" ] && git -C "$repo_dir" rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
     # A local base (develop) may be behind its remote: a merge done in origin/develop counts too.
     local refs=("$base")
     case "$base" in

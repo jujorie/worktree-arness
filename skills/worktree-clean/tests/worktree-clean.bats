@@ -609,3 +609,48 @@ mk_npm_state() {
   [[ "$output" == SKIPPED*/worktrees/a/open\ NOT_MERGED ]]
   [ ! -e "$FAKE_NPM_RUN_LOG" ]
 }
+
+# --- detached worktrees (worktree-create --detach) ----------------------------
+
+@test "a fresh detached worktree is EMPTY with no branch or base" {
+  mk_repo a
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/release/1.0" main
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col release/1.0 3)" = "-" ]
+  [ "$(col release/1.0 4)" = "-" ]
+  [ "$(col release/1.0 5)" = "EMPTY" ]
+  [ "$(col release/1.0 6)" = "0" ]
+}
+
+@test "remove deletes a detached EMPTY worktree without --force and keeps every branch" {
+  mk_repo a
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/release/1.0" main
+  run "$SCRIPT" remove --source a release/1.0
+  [ "$status" -eq 0 ]
+  [ "$output" = "REMOVED $ARNESS_ROOT/worktrees/a/release/1.0" ]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/release" ]
+  [ "$(git -C "$SRC/a" branch --format='%(refname:short)')" = "main" ]
+}
+
+@test "commits made on a detached HEAD make it NOT_MERGED and remove needs --force" {
+  mk_repo a
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/d" main
+  echo x > "$ARNESS_ROOT/worktrees/a/d/x.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/d" add x.txt
+  git_q -C "$ARNESS_ROOT/worktrees/a/d" commit -q -m work
+  run "$SCRIPT" list
+  [ "$(col d 5)" = "NOT_MERGED" ]
+  [ "$(col d 6)" = "1" ]
+  run "$SCRIPT" remove --source a d
+  [ "$status" -eq 13 ]
+  [ -d "$ARNESS_ROOT/worktrees/a/d" ]
+}
+
+@test "a detached worktree with uncommitted changes is DIRTY" {
+  mk_repo a
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/d" main
+  echo y > "$ARNESS_ROOT/worktrees/a/d/untracked.txt"
+  run "$SCRIPT" list
+  [ "$(col d 5)" = "DIRTY" ]
+}
