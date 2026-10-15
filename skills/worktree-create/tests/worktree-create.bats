@@ -520,3 +520,27 @@ origin_commit() {
   [ "$status" -eq 2 ]
   [ ! -e "$ARNESS_ROOT/worktrees/x" ]
 }
+
+# --- concurrent creation: .git/config.lock ---------------------------------------
+
+@test "the config writes wait for another git process holding .git/config.lock" {
+  mk_clone a
+  touch "$SRC/a/.git/config.lock"
+  ( sleep 0.6; rm -f "$SRC/a/.git/config.lock" ) &
+  run "$SCRIPT" --name feat/one --no-confirm
+  wait
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SRC/a" config --get "branch.feat/one.merge")" = "refs/heads/feat/one" ]
+  [ -n "$(git -C "$SRC/a" config --get "branch.feat/one.arness-base")" ]
+}
+
+@test "a config lock that never frees exits 3 and says the worktree exists without its config" {
+  mk_clone a
+  touch "$SRC/a/.git/config.lock"
+  run "$SCRIPT" --name feat/one --no-confirm
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"holds .git/config.lock"* ]]
+  [[ "$output" == *"worktree-config"* ]]
+  [ -d "$ARNESS_ROOT/worktrees/a/feat/one" ]
+  [[ "$output" != *"CREATED"* ]]
+}

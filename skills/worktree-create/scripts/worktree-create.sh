@@ -23,6 +23,8 @@
 # After CREATED, if config/<repo>/ exists, the worktree-config script runs on the new worktree (skip with
 # --no-config). Its output follows as lines prefixed with "CONFIG " (COPIED/SKIPPED/DONE/INSTALL_FAILED...).
 # If it fails, "CONFIG_FAILED <code>" is printed and the exit code is 14; the worktree stays created.
+# Exit 3 also when .git/config stays locked by another git process (the config writes are retried for about 2 s);
+# the worktree then exists without its config and stderr says how to finish or redo it.
 # Exit codes: 0 ok, 2 invalid usage/input, 3 git failed, 4 no source, 5 no name, 10-12 see above, 14 config failed.
 set -euo pipefail
 
@@ -30,6 +32,23 @@ EXIT_USAGE=2 EXIT_GIT=3 EXIT_NO_SOURCE=4 EXIT_NO_NAME=5 EXIT_CHOOSE=10 EXIT_CONF
 NO_FETCH=0   # set by --no-fetch; read by resolve_base
 
 die() { echo "error: $*" >&2; exit "$EXIT_USAGE"; }
+
+CREATED_DEST=""   # set once git has created the worktree; read by git_config
+
+# git_config <repo> <git config args>...: write the config of <repo>, retrying while another git process holds
+# .git/config.lock (several worktrees created at the same time, e.g. one agent per ticket). If it never frees,
+# say that the worktree exists without its config instead of leaving a half-made one with a bare git error.
+git_config() {
+  local repo="$1"
+  shift
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if git -C "$repo" config "$@" 2>/dev/null; then return 0; fi
+    sleep 0.2
+  done
+  echo "error: could not write the git config of $repo (another git process holds .git/config.lock?)" >&2
+  echo "error: the worktree $CREATED_DEST was created without its config: run the worktree-config skill on it, or remove it with worktree-clean and create it again" >&2
+  exit "$EXIT_GIT"
+}
 
 resolve_root() {
   if [ -n "${ARNESS_ROOT:-}" ]; then
@@ -182,21 +201,23 @@ main() {
       echo "error: git worktree add failed" >&2
       exit "$EXIT_GIT"
     fi
-    git -C "$repo" config "arness-worktree.$name.base" "$branch"
+    CREATED_DEST="$dest"
+    git_config "$repo" "arness-worktree.$name.base" "$branch"
     echo "CREATED $dest $branch detached"
   else
     if ! git -C "$repo" worktree add --quiet -b "$name" "$dest" "$branch" >&2; then
       echo "error: git worktree add failed" >&2
       exit "$EXIT_GIT"
     fi
+    CREATED_DEST="$dest"
     # Track origin/<name>, not the base: when the base is origin/<x> git sets that as upstream, so pull/push would
     # target the base branch. This only writes config (nothing is pushed); the first `git push` creates the branch.
     if git -C "$repo" remote | grep -Fxq origin; then
-      git -C "$repo" config "branch.$name.remote" origin
-      git -C "$repo" config "branch.$name.merge" "refs/heads/$name"
+      git_config "$repo" "branch.$name.remote" origin
+      git_config "$repo" "branch.$name.merge" "refs/heads/$name"
     fi
     # Remember the base: git does not, and worktree-clean needs it to tell if the branch was merged.
-    if [ "$branch" != "HEAD" ]; then git -C "$repo" config "branch.$name.arness-base" "$branch"; fi
+    if [ "$branch" != "HEAD" ]; then git_config "$repo" "branch.$name.arness-base" "$branch"; fi
     echo "CREATED $dest $branch"
   fi
 

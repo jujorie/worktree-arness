@@ -34,10 +34,10 @@ All validation and creation is done by `scripts/worktree-create.sh` (in this ski
 | `CONFIG_FAILED <code>` | 14 | The worktree **was created**, but applying `config/<repo>/` failed (the `CONFIG ...` lines say why, e.g. `INSTALL_FAILED`). Report it; once fixed, run the `worktree-config` skill on `<repo>/<name>`. |
 | `CHOOSE_SOURCE <repo>...` | 10 | Ask the user which repo. Valid answer: rerun with `--source <repo>`. Invalid or no answer: **finish with NO_SOURCE**. |
 | `CONFIRM_BRANCH <branch> [behind=<n>]` | 11 | Ask: create the worktree from `<branch>`? If `behind=<n>` with n > 0, say the local `<branch>` is `<n>` commits behind `origin/<branch>` and offer `origin/<branch>` as the base (rerun with `--branch origin/<branch>`). A `warning:` on stderr means the remote could not be checked: say so. Offline: `--no-fetch`. Yes: rerun with `--branch <branch>`. User gives another branch: rerun with that one; it may exist only in `origin` and the script fetches it by itself. |
-| `EXISTS <path>` | 12 | Tell the user; ask for another name. Never delete it. |
+| `EXISTS <path>` | 12 | Tell the user; ask for another name. Never delete it. If the worktree is that of a task whose pull request is already merged (`worktree-clean list` shows `PR_MERGED`), say so and offer to remove it with `worktree-clean` and create it again. |
 | `NO_SOURCE` | 4 | **Finish with NO_SOURCE** (no repo in `source/`, or the given one is not there). Suggest the `repo-clone` skill. |
 | `NO_NAME` | 5 | **Finish with NO_NAME**. Do not ask or guess a name. (Never with `--detach --branch`: that one names itself.) |
-| error on stderr | 2 / 3 | Show the message and ask the user. **Never fall back to another branch** (e.g. the current one) to get past it. |
+| error on stderr | 2 / 3 | Show the message and ask the user. **Never fall back to another branch** (e.g. the current one) to get past it. If the message says `.git/config.lock` (another git process, usually another worktree being created at the same time, kept the config locked for about 2 s), the worktree **exists without its config**: run the `worktree-config` skill on it (it also installs the dependencies), or remove it with `worktree-clean` and create it again. |
 
 Always keep the same `--source`/`--name`/`--detach` when rerunning after a question.
 
