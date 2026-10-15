@@ -48,3 +48,5 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
 - Never pass `--force` without the user's explicit confirmation in this conversation for those specific worktrees.
 - Never build paths by hand or delete folders in `worktrees/` or `source/` yourself.
 - Names come from the `name` column of `list`; do not invent them.
+- **A subagent cannot ask, so it must not remove on its own account.** Return the table to whoever launched you, with the names that would need `--force` and what each one loses; the user's confirmation comes through them, in their conversation, naming those worktrees. A confirmation relayed in a brief without that is not enough.
+- **The auto-mode permission classifier can deny `remove --force`** ("Irreversible Local Destruction") even after the user confirmed in the conversation, because no Bash rule allows it. Do not try another route (`git worktree remove`, deleting folders): report the exact command and let the user run it (`! skills/worktree-clean/scripts/worktree-clean.sh remove --source <repo> --force <name>`) or add the rule. `MERGED`, `PR_MERGED` and `EMPTY` need no `--force` and pass.
