@@ -7,6 +7,7 @@
 # list stdout: one tab-separated row per worktree, or NONE (exit 0):
 #   repo  name  branch  base  status  ahead  path
 #   status: MERGED | PR_MERGED | EMPTY | NOT_MERGED | DIRTY | UNKNOWN_BASE
+#           DIRTY = uncommitted changes, or a rebase/bisect/merge/cherry-pick/revert in progress
 #           EMPTY = no commits of its own yet (still where it was created): nothing merged, nothing to lose
 #           PR_MERGED = the branch was deleted in origin and a merged pull request had exactly its tip
 #                       as head (squash and rebase merges included): nothing to lose
@@ -96,13 +97,28 @@ stop_npm_scripts() {
 # Print the ref a detached worktree shows: the one worktree-create recorded, else a branch or tag at its HEAD
 # (remote first: a release is usually origin/<branch>), else "-". Args: repo_dir wt_path name
 detached_base() {
-  local repo_dir="$1" path="$2" name="$3" base
+  local repo_dir="$1" path="$2" name="$3" base pattern
   base="$(git -C "$repo_dir" config --get "arness-worktree.$name.base" 2>/dev/null || true)"
-  if [ -z "$base" ]; then
-    base="$(git -C "$path" for-each-ref --points-at HEAD --format='%(refname:short)' refs/remotes refs/heads refs/tags 2>/dev/null \
+  # One pattern at a time: for-each-ref sorts all its matches by refname, whatever the order of the patterns.
+  # Several refs of one kind on HEAD (origin/main and origin/release/1.2) give the first by name: only the
+  # recorded ref is exact.
+  for pattern in refs/remotes refs/heads refs/tags; do
+    if [ -n "$base" ]; then break; fi
+    base="$(git -C "$path" for-each-ref --points-at HEAD --format='%(refname:short)' "$pattern" 2>/dev/null \
       | grep -v '/HEAD$' | awk 'NR == 1' || true)"
-  fi
+  done
   printf '%s\n' "${base:--}"
+}
+
+# True if a rebase, bisect, merge, cherry-pick or revert is in progress in the worktree: removing it loses
+# that state even when no file is changed (a rebase starts on a commit a branch holds). Args: wt_path
+op_in_progress() {
+  local gitdir f
+  gitdir="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  for f in rebase-merge rebase-apply BISECT_LOG MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+    if [ -e "$gitdir/$f" ]; then return 0; fi
+  done
+  return 1
 }
 
 # Sets S_BASE, S_AHEAD, S_STATUS for a worktree. Args: repo_dir wt_path branch fallback_base name
@@ -149,8 +165,8 @@ compute_status() {
         S_STATUS="PR_MERGED"
       fi ;;
   esac
-  # Uncommitted work wins over any other status.
-  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then S_STATUS="DIRTY"; fi
+  # Uncommitted work, or a git operation in progress, wins over any other status.
+  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ] || op_in_progress "$path"; then S_STATUS="DIRTY"; fi
 }
 
 # Print one TSV row per worktree of <repo> that lives in worktrees/<repo>/.

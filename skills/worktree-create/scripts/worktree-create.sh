@@ -135,7 +135,11 @@ main() {
   local repo="$source_dir/$source"
 
   # 2. Worktree name. A detached worktree is named after the branch it shows, so it needs no name of its own.
-  if [ -z "$name" ] && [ "$detach" -eq 1 ]; then name="${branch#origin/}"; fi
+  # HEAD or @ name no branch, so they give no name.
+  if [ -z "$name" ] && [ "$detach" -eq 1 ]; then
+    name="${branch#origin/}"
+    case "$name" in HEAD|@) name="" ;; esac
+  fi
   if [ -z "$name" ]; then echo "NO_NAME"; exit "$EXIT_NO_NAME"; fi
   validate_name "$name" || die "invalid name: '$name' (use letters, digits, . _ - and / between parts)"
   if [ "$detach" -eq 0 ]; then

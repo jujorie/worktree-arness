@@ -653,6 +653,52 @@ mk_detached() {
   [ "$(col old 5)" = "EMPTY" ]
 }
 
+@test "without a recorded ref, a remote branch at HEAD wins over local branches and tags" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git_q -C "$ORIGIN" checkout -q -b release/1.2
+  echo 2 > "$ORIGIN/g.txt"; git_q -C "$ORIGIN" add g.txt; git_q -C "$ORIGIN" commit -q -m c2
+  git_q -C "$ORIGIN" checkout -q main
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  # local branch and tag on the same commit, sorting before origin/release/1.2 by refname
+  git_q -C "$SRC/a" branch aaa origin/release/1.2
+  git_q -C "$SRC/a" tag v1 origin/release/1.2
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/rel" origin/release/1.2
+  run "$SCRIPT" list --no-fetch
+  [ "$(col rel 4)" = "origin/release/1.2" ]
+}
+
+@test "a local branch at HEAD wins over a tag when no remote branch is there" {
+  mk_repo a
+  git_q -C "$SRC/a" tag aaa
+  git_q -C "$SRC/a" worktree add -q --detach "$ARNESS_ROOT/worktrees/a/d" main
+  run "$SCRIPT" list
+  [ "$(col d 4)" = "main" ]
+}
+
+@test "a rebase in progress with a clean tree is DIRTY, not EMPTY, and remove needs --force" {
+  mk_repo a
+  mk_wt a w commit
+  echo 2 > "$SRC/a/g.txt"; git_q -C "$SRC/a" add g.txt; git_q -C "$SRC/a" commit -q -m c2
+  # stops after replaying the first commit: tree clean, HEAD detached, rebase state on disk
+  GIT_SEQUENCE_EDITOR=true git_q -C "$ARNESS_ROOT/worktrees/a/w" rebase -q -x false main >/dev/null 2>&1 || true
+  [ -z "$(git -C "$ARNESS_ROOT/worktrees/a/w" status --porcelain)" ]
+  run "$SCRIPT" list
+  [ "$(col w 5)" = "DIRTY" ]
+  run "$SCRIPT" remove --source a w
+  [ "$status" -eq 13 ]
+  [ -d "$ARNESS_ROOT/worktrees/a/w" ]
+}
+
+@test "a bisect in progress in a detached worktree is DIRTY" {
+  mk_repo a
+  mk_detached a d main
+  git_q -C "$ARNESS_ROOT/worktrees/a/d" bisect start >/dev/null
+  run "$SCRIPT" list
+  [ "$(col d 5)" = "DIRTY" ]
+}
+
 @test "remove deletes a detached EMPTY worktree without --force, keeps every branch and drops its record" {
   mk_repo a
   git_q -C "$SRC/a" branch release/1.0

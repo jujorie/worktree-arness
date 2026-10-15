@@ -468,6 +468,35 @@ origin_commit() {
   [ ! -e "$ARNESS_ROOT/worktrees/a/w" ]
 }
 
+@test "--detach --name after CONFIRM_BRANCH detaches at the confirmed branch" {
+  mk_repo a
+  git_q -C "$SRC/a" checkout -q -b develop
+  run "$SCRIPT" --detach --name w
+  [ "$status" -eq 11 ]
+  run "$SCRIPT" --detach --name w --branch develop
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/w develop detached" ]
+  [ "$(git -C "$ARNESS_ROOT/worktrees/a/w" rev-parse --abbrev-ref HEAD)" = "HEAD" ]
+}
+
+@test "--detach --name --no-confirm detaches at the current branch" {
+  mk_repo a
+  git_q -C "$SRC/a" checkout -q -b develop
+  run "$SCRIPT" --detach --name w --no-confirm
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/a/w develop detached" ]
+}
+
+@test "--detach --branch HEAD or @ gives no name of its own" {
+  mk_repo a
+  for b in HEAD @ origin/HEAD; do
+    run "$SCRIPT" --detach --branch "$b"
+    [ "$status" -eq 5 ]
+    [ "$output" = "NO_NAME" ]
+  done
+  [ ! -e "$ARNESS_ROOT/worktrees/a" ]
+}
+
 @test "--detach on a missing branch is an error and creates nothing" {
   mk_clone a
   run "$SCRIPT" --detach --branch origin/epic/NOPE
