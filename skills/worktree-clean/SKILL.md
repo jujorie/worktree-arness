@@ -24,17 +24,18 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
    - `EMPTY`: the branch has no commits of its own yet (a worktree just created). Nothing was merged and nothing is lost, but it is **not** "merged": never describe it as merged.
    - `MERGED`: branch is in its base, or in `origin/<base>` (merged in the remote while the local base is behind). Safe to remove.
    - `PR_MERGED`: the branch was deleted in origin and a merged pull request had exactly the local tip as head (squash or rebase merges included; typical of someone else's PR checked out to test it). Safe to remove.
+   - `PUSHED`: the base is the branch's own remote (`origin/<branch>`: a branch created from origin to keep working on it or test it) and it holds every local commit. Nothing is lost, but it is **not** "merged": being in its own remote only means it was pushed. Never describe it as merged.
    - `NOT_MERGED`: has `ahead` commits not in base. Removing loses them.
    - `DIRTY`: uncommitted changes, or a rebase, bisect, merge, cherry-pick or revert in progress. Removing loses them, even if the PR was merged: name the changed files or the operation (`git -C <path> status`).
    - Detached worktree (`worktree-create --detach`, branch `(detached)`, base the ref it was checked out from, or `-` if unknown): `EMPTY` while it has no commits that no branch, remote branch or tag holds; otherwise `NOT_MERGED` with those commits as `ahead`. Removing it never deletes a branch.
    - `UNKNOWN_BASE`: base not recorded (worktree not made by `worktree-create`). Ask the user for the base branch and rerun `list --base <ref>`, or treat it like `NOT_MERGED`.
-   - Note: squash or rebase merges are detected only through `gh` (`PR_MERGED`); without `gh`, or with `--no-fetch`, they show as `NOT_MERGED` or `EMPTY`.
+   - Note: squash or rebase merges are detected only through `gh` (`PR_MERGED`); without `gh`, or with `--no-fetch`, they show as `NOT_MERGED`, `PUSHED` or `EMPTY`.
    - The remote side of each base (`origin/<branch>`, or `origin/<base>` for a local base) is refreshed first (one `git fetch` per base). If the fetch fails a `warning:` appears on stderr and the status may be stale: tell the user. A `note: origin/<branch> no longer exists` is not a failure: the branch was deleted in origin (usually after its PR merged). Offline: add `--no-fetch`.
 3. Ask: which to delete? A comma-separated list (numbers or names), or `all` / `todos`.
-   - `all` / `todos` means **every `MERGED` or `PR_MERGED` worktree only**. Never include `EMPTY` or any other status in it; those only by explicit name.
+   - `all` / `todos` means **every `MERGED` or `PR_MERGED` worktree only**. Never include `PUSHED`, `EMPTY` or any other status in it; those only by explicit name.
    - If nothing is `MERGED` or `PR_MERGED` and the user said `all`, say so and ask for explicit names.
-4. For each chosen worktree that is `NOT_MERGED`, `DIRTY` or `UNKNOWN_BASE`, ask a second confirmation naming what is lost (the `ahead` commits, or the uncommitted changes). Only if the user confirms, it goes with `--force`. `MERGED`, `PR_MERGED` and `EMPTY` lose nothing: no second confirmation, no `--force`.
-5. Run one `remove` per repo, grouping names (no `--force` for `MERGED`, `PR_MERGED` and `EMPTY`; a separate call with `--force` for the confirmed ones):
+4. For each chosen worktree that is `NOT_MERGED`, `DIRTY` or `UNKNOWN_BASE`, ask a second confirmation naming what is lost (the `ahead` commits, or the uncommitted changes). Only if the user confirms, it goes with `--force`. `MERGED`, `PR_MERGED`, `PUSHED` and `EMPTY` lose nothing: no second confirmation, no `--force`.
+5. Run one `remove` per repo, grouping names (no `--force` for `MERGED`, `PR_MERGED`, `PUSHED` and `EMPTY`; a separate call with `--force` for the confirmed ones):
    ```bash
    skills/worktree-clean/scripts/worktree-clean.sh remove --source <repo> [--base <ref>] [--force] <name>...
    ```
@@ -49,4 +50,4 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
 - Never build paths by hand or delete folders in `worktrees/` or `source/` yourself.
 - Names come from the `name` column of `list`; do not invent them.
 - **A subagent cannot ask, so it must not remove on its own account.** Return the table to whoever launched you, with the names that would need `--force` and what each one loses; the user's confirmation comes through them, in their conversation, naming those worktrees. A confirmation relayed in a brief without that is not enough.
-- **The auto-mode permission classifier can deny `remove --force`** ("Irreversible Local Destruction") even after the user confirmed in the conversation, because no Bash rule allows it. Do not try another route (`git worktree remove`, deleting folders): report the exact command and let the user run it (`! skills/worktree-clean/scripts/worktree-clean.sh remove --source <repo> --force <name>`) or add the rule. `MERGED`, `PR_MERGED` and `EMPTY` need no `--force` and pass.
+- **The auto-mode permission classifier can deny `remove --force`** ("Irreversible Local Destruction") even after the user confirmed in the conversation, because no Bash rule allows it. Do not try another route (`git worktree remove`, deleting folders): report the exact command and let the user run it (`! skills/worktree-clean/scripts/worktree-clean.sh remove --source <repo> --force <name>`) or add the rule. `MERGED`, `PR_MERGED`, `PUSHED` and `EMPTY` need no `--force` and pass.

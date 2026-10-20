@@ -483,6 +483,52 @@ squash_merge_pr() {
   [ "$(col pr/X-2 5)" = "NOT_MERGED" ]
 }
 
+# --- PUSHED: work committed on a branch whose base is its own remote (origin/<branch>) ---
+
+# A local commit on pr/X-2; with "push", also pushed to origin/pr/X-2. Sets TIP to the new tip.
+commit_on_pr_wt() {
+  echo 3 > "$ARNESS_ROOT/worktrees/a/pr/X-2/h.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/pr/X-2" add h.txt
+  git_q -C "$ARNESS_ROOT/worktrees/a/pr/X-2" commit -q -m local
+  if [ "${1:-}" = push ]; then git -C "$ARNESS_ROOT/worktrees/a/pr/X-2" push -q origin pr/X-2 2>/dev/null; fi
+  TIP="$(git -C "$SRC/a" rev-parse pr/X-2)"
+}
+
+@test "work pushed to its own remote base is PUSHED, not MERGED" {
+  mk_pr_wt
+  commit_on_pr_wt push
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr/X-2 4)" = "origin/pr/X-2" ]
+  [ "$(col pr/X-2 5)" = "PUSHED" ]
+  [ "$(col pr/X-2 6)" = "0" ]
+}
+
+@test "work not pushed to its own remote base is NOT_MERGED" {
+  mk_pr_wt
+  commit_on_pr_wt
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "NOT_MERGED" ]
+  [ "$(col pr/X-2 6)" = "1" ]
+}
+
+@test "remove deletes a PUSHED worktree and its branch without --force" {
+  mk_pr_wt
+  commit_on_pr_wt push
+  run "$SCRIPT" remove --source a pr/X-2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REMOVED $ARNESS_ROOT/worktrees/a/pr/X-2"* ]]
+  [ -z "$(git -C "$SRC/a" branch --list pr/X-2)" ]
+}
+
+@test "pushed work squash-merged and deleted in origin is PR_MERGED, not PUSHED" {
+  mk_pr_wt
+  commit_on_pr_wt push
+  squash_merge_pr
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "PR_MERGED" ]
+}
+
 @test "a branch still in origin is not PR_MERGED and gh is not asked" {
   mk_pr_wt
   export FAKE_GH_HEADS="$TIP"

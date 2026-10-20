@@ -6,11 +6,13 @@
 #
 # list stdout: one tab-separated row per worktree, or NONE (exit 0):
 #   repo  name  branch  base  status  ahead  path
-#   status: MERGED | PR_MERGED | EMPTY | NOT_MERGED | DIRTY | UNKNOWN_BASE
+#   status: MERGED | PR_MERGED | PUSHED | EMPTY | NOT_MERGED | DIRTY | UNKNOWN_BASE
 #           DIRTY = uncommitted changes, or a rebase/bisect/merge/cherry-pick/revert in progress
 #           EMPTY = no commits of its own yet (still where it was created): nothing merged, nothing to lose
 #           PR_MERGED = the branch was deleted in origin and a merged pull request had exactly its tip
 #                       as head (squash and rebase merges included): nothing to lose
+#           PUSHED = the base is the branch's own remote (origin/<branch>: a branch checked out from origin)
+#                    and it holds every commit: nothing to lose, but nothing says it was merged anywhere
 #   ahead:  commits of the branch not in base ("-" if unknown)
 #   branch is "(detached)" for a worktree with no branch (worktree-create --detach, e.g. a release): base is
 #   the ref it was checked out from (git config arness-worktree.<name>.base), else a branch or tag at its
@@ -153,6 +155,9 @@ compute_status() {
       created="$(git -C "$repo_dir" reflog show --format=%H "refs/heads/$branch" 2>/dev/null | tail -n 1)"
       if [ -n "$created" ] && [ "$created" = "$(git -C "$repo_dir" rev-parse "$branch^{commit}")" ]; then
         S_STATUS="EMPTY"
+      elif [ "$base" = "origin/$branch" ]; then
+        # The base is the branch's own remote: being in it only means the work was pushed, not merged.
+        S_STATUS="PUSHED"
       else
         S_STATUS="MERGED"
       fi
@@ -160,7 +165,7 @@ compute_status() {
   fi
   # A squash or rebase merge leaves the commits out of the base: ask the forge.
   case "$S_STATUS" in
-    EMPTY|NOT_MERGED|UNKNOWN_BASE)
+    EMPTY|PUSHED|NOT_MERGED|UNKNOWN_BASE)
       if [ "$branch" != "-" ] && [ "${NO_FETCH:-0}" -eq 0 ] && pr_merged "$repo_dir" "$branch"; then
         S_STATUS="PR_MERGED"
       fi ;;
@@ -243,7 +248,7 @@ cmd_remove() {
 $row
 EOF_ROW
     case "$status" in
-      MERGED|PR_MERGED|EMPTY) ;;
+      MERGED|PR_MERGED|PUSHED|EMPTY) ;;
       *) if [ "$FORCE" -eq 0 ]; then echo "SKIPPED $f_path $status"; skipped=1; continue; fi ;;
     esac
     stop_npm_scripts "$repo/$name" || { echo "SKIPPED $f_path stop-failed"; skipped=1; continue; }
@@ -260,7 +265,8 @@ EOF_ROW
       # -d is the safe delete; it can refuse a branch merged into the base but not into HEAD.
       # Merge into the base was verified above, so -D is safe then; with --force the user asked for it.
       # PR_MERGED: the tip is the head of a merged pull request, so -D loses nothing either.
-      if [ "$status" = "MERGED" ] || [ "$status" = "EMPTY" ]; then
+      # PUSHED: origin/<branch> holds every commit, so -D loses nothing either.
+      if [ "$status" = "MERGED" ] || [ "$status" = "PUSHED" ] || [ "$status" = "EMPTY" ]; then
         git -C "$repo_dir" branch -q -d "$branch" >&2 || git -C "$repo_dir" branch -q -D "$branch" >&2
       else
         git -C "$repo_dir" branch -q -D "$branch" >&2
