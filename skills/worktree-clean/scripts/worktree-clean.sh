@@ -197,7 +197,8 @@ prefetch_bases() {
   local r b br err
   for r in "${SEL_REPOS[@]}"; do
     git -C "$SOURCE_DIR/$r" remote | grep -Fxq origin || continue
-    { git -C "$SOURCE_DIR/$r" config --get-regexp '^branch\..*\.arness-base$' 2>/dev/null | awk '{print $2}'
+    # A repo with no recorded base makes git config exit 1; under pipefail that would abort the script.
+    { { git -C "$SOURCE_DIR/$r" config --get-regexp '^branch\..*\.arness-base$' 2>/dev/null || true; } | awk '{print $2}'
       if [ -n "$FALLBACK" ]; then printf '%s\n' "$FALLBACK"; fi
     } | LC_ALL=C sort -u | while IFS= read -r b; do
       case "$b" in

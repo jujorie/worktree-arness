@@ -78,6 +78,14 @@ teardown() { rm -rf "$TMP"; }
   [ "$output" = "NONE" ]
 }
 
+@test "list goes on past a cloned repo with no worktrees" {
+  mk_remote_wt_nocommit
+  git clone -q "$ORIGIN" "$SRC/b" 2>/dev/null
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col w 5)" = "EMPTY" ]
+}
+
 @test "list ignores worktrees outside worktrees/<repo>/" {
   mk_repo a
   git_q -C "$SRC/a" worktree add -q -b other "$TMP/elsewhere" main
