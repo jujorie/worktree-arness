@@ -537,6 +537,91 @@ commit_on_pr_wt() {
   [ "$(col pr/X-2 5)" = "PR_MERGED" ]
 }
 
+@test "a branch updated from its remote with no commits of its own is PUSHED" {
+  mk_pr_wt
+  git_q -C "$ORIGIN" checkout -q pr/X-2
+  echo 4 > "$ORIGIN/i.txt"; git_q -C "$ORIGIN" add i.txt; git_q -C "$ORIGIN" commit -q -m more
+  git_q -C "$ORIGIN" checkout -q main
+  git -C "$ARNESS_ROOT/worktrees/a/pr/X-2" pull -q --ff-only origin pr/X-2 2>/dev/null
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "PUSHED" ]
+}
+
+@test "work on its own remote base that origin no longer has is NOT_MERGED, not PUSHED" {
+  mk_pr_wt
+  commit_on_pr_wt push
+  git_q -C "$ORIGIN" branch -q -D pr/X-2
+  run "$SCRIPT" list
+  [ "$(col pr/X-2 5)" = "NOT_MERGED" ]
+  [ "$(col pr/X-2 6)" = "-" ]
+}
+
+# --- PUSHED: a new branch with work pushed to origin/<branch>, its base another branch ---
+
+# Worktree w from origin/epic/X-1 with one commit; with "push", also pushed to origin/w.
+commit_on_remote_wt() {
+  mk_remote_wt_nocommit
+  echo 3 > "$ARNESS_ROOT/worktrees/a/w/h.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/w" add h.txt
+  git_q -C "$ARNESS_ROOT/worktrees/a/w" commit -q -m work
+  if [ "${1:-}" = push ]; then git -C "$ARNESS_ROOT/worktrees/a/w" push -q origin w 2>/dev/null; fi
+}
+
+@test "a new branch pushed to origin but not merged is PUSHED, with its commits as ahead" {
+  commit_on_remote_wt push
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col w 4)" = "origin/epic/X-1" ]
+  [ "$(col w 5)" = "PUSHED" ]
+  [ "$(col w 6)" = "1" ]
+}
+
+@test "a new branch with commits after its push is NOT_MERGED" {
+  commit_on_remote_wt push
+  echo 4 > "$ARNESS_ROOT/worktrees/a/w/i.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/w" add i.txt
+  git_q -C "$ARNESS_ROOT/worktrees/a/w" commit -q -m more
+  run "$SCRIPT" list
+  [ "$(col w 5)" = "NOT_MERGED" ]
+  [ "$(col w 6)" = "2" ]
+}
+
+@test "a new branch never pushed is NOT_MERGED" {
+  commit_on_remote_wt
+  run "$SCRIPT" list
+  [ "$(col w 5)" = "NOT_MERGED" ]
+}
+
+@test "a branch deleted in origin is not PUSHED though its stale origin/<branch> holds it" {
+  commit_on_remote_wt push
+  git_q -C "$ORIGIN" branch -q -D w
+  run "$SCRIPT" list
+  [ "$(col w 5)" = "NOT_MERGED" ]
+}
+
+@test "a branch rewritten in origin is not PUSHED though its stale origin/<branch> holds it" {
+  commit_on_remote_wt push
+  git_q -C "$ORIGIN" branch -q -f w epic/X-1
+  run "$SCRIPT" list
+  [ "$(col w 5)" = "NOT_MERGED" ]
+}
+
+@test "--no-fetch trusts the local origin/<branch> for PUSHED" {
+  commit_on_remote_wt push
+  git_q -C "$ORIGIN" branch -q -D w
+  run "$SCRIPT" list --no-fetch
+  [ "$(col w 5)" = "PUSHED" ]
+}
+
+@test "remove deletes a pushed new branch without --force, and keeps it in origin" {
+  commit_on_remote_wt push
+  run "$SCRIPT" remove --source a w
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REMOVED $ARNESS_ROOT/worktrees/a/w"* ]]
+  [ -z "$(git -C "$SRC/a" branch --list w)" ]
+  git -C "$ORIGIN" rev-parse --verify --quiet refs/heads/w >/dev/null
+}
+
 @test "a branch still in origin is not PR_MERGED and gh is not asked" {
   mk_pr_wt
   export FAKE_GH_HEADS="$TIP"

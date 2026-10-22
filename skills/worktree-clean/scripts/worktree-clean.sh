@@ -11,9 +11,10 @@
 #           EMPTY = no commits of its own yet (still where it was created): nothing merged, nothing to lose
 #           PR_MERGED = the branch was deleted in origin and a merged pull request had exactly its tip
 #                       as head (squash and rebase merges included): nothing to lose
-#           PUSHED = the base is the branch's own remote (origin/<branch>: a branch checked out from origin)
-#                    and it holds every commit: nothing to lose, but nothing says it was merged anywhere
-#   ahead:  commits of the branch not in base ("-" if unknown)
+#           PUSHED = origin/<branch> holds every commit (pushed work, e.g. a pull request not merged yet, or
+#                    a branch checked out from origin and updated from it): nothing to lose, but nothing
+#                    says it was merged anywhere. Online, the tip in origin is checked with ls-remote.
+#   ahead:  commits of the branch not in base ("-" if unknown); a PUSHED branch may have some
 #   branch is "(detached)" for a worktree with no branch (worktree-create --detach, e.g. a release): base is
 #   the ref it was checked out from (git config arness-worktree.<name>.base), else a branch or tag at its
 #   HEAD, else "-". It is EMPTY, or NOT_MERGED with ahead = commits on its HEAD that no branch, remote
@@ -78,6 +79,21 @@ pr_merged() {
   heads="$(cd "$repo_dir" && GH_PROMPT_DISABLED=1 gh pr list --head "$branch" --state merged \
     --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || return 1
   printf '%s\n' "$heads" | grep -Fxq "$tip"
+}
+
+# True if origin holds every commit of <branch>: origin/<branch> contains its tip. Online the tip in origin is
+# asked with ls-remote, so a stale origin/<branch> (deleted or rewritten in origin) proves nothing; a tip
+# this clone does not have is a doubt, so false. --no-fetch trusts the local origin/<branch>.
+# Args: repo_dir branch
+pushed() {
+  local repo_dir="$1" branch="$2" local_tip remote_tip
+  local_tip="$(git -C "$repo_dir" rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" || return 1
+  git -C "$repo_dir" merge-base --is-ancestor "$branch" "$local_tip" 2>/dev/null || return 1
+  if [ "${NO_FETCH:-0}" -eq 1 ]; then return 0; fi
+  remote_tip="$(GIT_TERMINAL_PROMPT=0 git -C "$repo_dir" ls-remote origin "refs/heads/$branch" 2>/dev/null \
+    | awk 'NR == 1 { print $1 }')"
+  [ -n "$remote_tip" ] || return 1
+  [ "$remote_tip" = "$local_tip" ] || git -C "$repo_dir" merge-base --is-ancestor "$branch" "$remote_tip" 2>/dev/null
 }
 
 # Stop what npm-run started in worktree <repo>/<name> and pass its STOPPED lines on. Nothing to do when
@@ -147,7 +163,8 @@ compute_status() {
     esac
     S_AHEAD="$(git -C "$repo_dir" rev-list --count "$branch" --not "${refs[@]}")"
     if [ "$S_AHEAD" -ne 0 ]; then
-      S_STATUS="NOT_MERGED"
+      # Work not in the base is still safe if it was pushed to the branch's own remote (a PR not merged yet).
+      if pushed "$repo_dir" "$branch"; then S_STATUS="PUSHED"; else S_STATUS="NOT_MERGED"; fi
     else
       # Nothing outside the base. That is "merged" only if the branch ever had work: a branch still on the
       # commit it was created from (oldest reflog entry) has merged nothing yet.
@@ -157,7 +174,8 @@ compute_status() {
         S_STATUS="EMPTY"
       elif [ "$base" = "origin/$branch" ]; then
         # The base is the branch's own remote: being in it only means the work was pushed, not merged.
-        S_STATUS="PUSHED"
+        # If origin no longer holds it (deleted, rewritten), the local copy of the base proves nothing.
+        if pushed "$repo_dir" "$branch"; then S_STATUS="PUSHED"; else S_STATUS="NOT_MERGED" S_AHEAD="-"; fi
       else
         S_STATUS="MERGED"
       fi
