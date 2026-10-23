@@ -749,6 +749,38 @@ mk_npm_state() {
   [ ! -e "$FAKE_NPM_RUN_LOG" ]
 }
 
+# --- tmp/<skill>/<repo>/<name> of a removed worktree --------------------------
+
+@test "remove purges what any skill kept in tmp for the worktree, and nothing else" {
+  mk_repo a
+  mk_wt a feat/x commit
+  merge_wt a feat/x
+  mkdir -p "$ARNESS_ROOT/tmp/worktree-config/a/feat/x" "$ARNESS_ROOT/tmp/other-skill/a/feat/x/sub" \
+    "$ARNESS_ROOT/tmp/worktree-config/a/feat/y" "$ARNESS_ROOT/tmp/other-skill/PROJ-1"
+  echo log > "$ARNESS_ROOT/tmp/worktree-config/a/feat/x/install.log"
+  echo n > "$ARNESS_ROOT/tmp/other-skill/a/feat/x/sub/note"
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == REMOVED*/worktrees/a/feat/x ]]
+  [[ "$output" == *"PURGED tmp/worktree-config/a/feat/x"* ]]
+  [[ "$output" == *"PURGED tmp/other-skill/a/feat/x"* ]]
+  [ ! -e "$ARNESS_ROOT/tmp/worktree-config/a/feat/x" ]
+  [ ! -e "$ARNESS_ROOT/tmp/other-skill/a" ]          # left empty, so pruned
+  [ -d "$ARNESS_ROOT/tmp/worktree-config/a/feat/y" ] # another worktree's state stays
+  [ -d "$ARNESS_ROOT/tmp/other-skill/PROJ-1" ]
+  [ -d "$ARNESS_ROOT/tmp/other-skill" ]              # tmp/<skill> itself is kept
+}
+
+@test "a skipped worktree keeps its tmp state" {
+  mk_repo a
+  mk_wt a open commit
+  mkdir -p "$ARNESS_ROOT/tmp/worktree-config/a/open"
+  run "$SCRIPT" remove --source a open
+  [ "$status" -eq 13 ]
+  [[ "$output" != *PURGED* ]]
+  [ -d "$ARNESS_ROOT/tmp/worktree-config/a/open" ]
+}
+
 # --- detached worktrees (worktree-create --detach) ----------------------------
 
 # mk_detached <repo> <name> <ref> : detached worktree with its ref recorded, like worktree-create --detach.

@@ -22,11 +22,14 @@
 # remove stdout, per NAME (exit 13 if any SKIPPED):
 #   STOPPED <repo>/<name> <script> <pid>   an npm script npm-run started there, stopped before removing it
 #   REMOVED <path>
+#   PURGED <tmp path>              after REMOVED: what skills kept for it in tmp/<skill>/<repo>/<name>
 #   SKIPPED <path|name> <reason>   reason: invalid-name | not-a-worktree | git-failed | stop-failed |
 #                                  NOT_MERGED | DIRTY | UNKNOWN_BASE (these three need --force)
 # Before a worktree is removed, the npm scripts npm-run started in it (dev servers, watchers) are stopped
 # with `npm-run.sh stop --worktree <repo>/<name>`: once its folder is gone they would keep running and
 # holding their ports. If that stop fails the worktree is kept (stop-failed).
+# After it is removed, every tmp/<skill>/<repo>/<name> (logs, pids, notes of any skill) goes too, with the
+# folders left empty up to tmp/<skill>: nothing reads them once the worktree is gone.
 # The base of a worktree is read from git config branch.<name>.arness-base (set by worktree-create);
 # --base is the fallback when it is missing.
 # Merge status looks at the base and at its remote side: a worktree is MERGED if its branch is in <base> or
@@ -110,6 +113,20 @@ stop_npm_scripts() {
     return 1
   fi
   printf '%s\n' "$out" | grep '^STOPPED ' || true
+}
+
+# Remove what skills kept in tmp/<skill>/<slug> for a removed worktree, and the folders left empty up to
+# tmp/<skill> (kept). Prints PURGED per path. Args: slug
+purge_tmp() {
+  local slug="$1" p top d
+  for p in "$ROOT"/tmp/*/"$slug"; do
+    if [ ! -e "$p" ] && [ ! -L "$p" ]; then continue; fi
+    rm -rf "$p"
+    echo "PURGED ${p#"$ROOT/"}"
+    top="${p%/"$slug"}"
+    d="$(dirname "$p")"
+    while [ "$d" != "$top" ] && rmdir "$d" 2>/dev/null; do d="$(dirname "$d")"; done
+  done
 }
 
 # Print the ref a detached worktree shows: the one worktree-create recorded, else a branch or tag at its HEAD
@@ -300,6 +317,7 @@ EOF_ROW
     d="$(dirname "$f_path")"
     while [ "$d" != "$stop" ] && rmdir "$d" 2>/dev/null; do d="$(dirname "$d")"; done
     echo "REMOVED $f_path"
+    purge_tmp "$repo/$name"
   done
   if [ "$skipped" -eq 1 ]; then exit "$EXIT_SKIPPED"; fi
 }
