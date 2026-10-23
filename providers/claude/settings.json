@@ -9,6 +9,7 @@
       "Skill(worktree-config)",
       "Skill(npm-run)",
       "Skill(learnings-save)",
+      "Skill(tmp-clean)",
       "Bash(skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash(skills/worktree-create/scripts/worktree-create.sh *)",
@@ -18,7 +19,9 @@
       "Bash(skills/worktree-config/scripts/worktree-config.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/worktree-config/scripts/worktree-config.sh *)",
       "Bash(skills/npm-run/scripts/npm-run.sh *)",
-      "Bash({{$ARNESS_ROOT}}/skills/npm-run/scripts/npm-run.sh *)"
+      "Bash({{$ARNESS_ROOT}}/skills/npm-run/scripts/npm-run.sh *)",
+      "Bash(skills/tmp-clean/scripts/tmp-clean.sh *)",
+      "Bash({{$ARNESS_ROOT}}/skills/tmp-clean/scripts/tmp-clean.sh *)"
     ]
   }
 }

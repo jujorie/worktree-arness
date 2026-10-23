@@ -9,7 +9,7 @@
 # added together. Files they match are not copied and not reported. Nothing is ignored without them.
 # The .configignore files themselves are never copied.
 # config/<repo>/install.sh (top level only) is never copied: it runs with `bash`, cwd = the worktree.
-# Its output (stdout+stderr) goes to <arness>/tmp/worktree-config/<repo>/<name>-install.log, never to the
+# Its output (stdout+stderr) goes to <arness>/tmp/worktree-config/<repo>/<name>/install.log, never to the
 # console, so a build cannot flood the caller. On failure only the last 20 lines are shown (on stderr).
 #
 # Stdout, first word is the status:
@@ -170,7 +170,7 @@ main() {
   # 2. install.sh runs IN the worktree. Never copied.
   local installed=no rc=0 log
   if [ -f "$cfg/install.sh" ] && [ ! -L "$cfg/install.sh" ]; then
-    log="$root/tmp/worktree-config/$repo/$name-install.log"
+    log="$root/tmp/worktree-config/$repo/$name/install.log"
     mkdir -p "$(dirname "$log")"
     (cd "$WT" && bash "$cfg/install.sh") > "$log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then

@@ -14,7 +14,7 @@ All validation, copying and execution is done by `scripts/worktree-config.sh` (i
 What it does:
 - Every file under `config/<repo>/` is copied to the same relative path in the worktree (`config/a/src/test.js` → `worktrees/a/<name>/src/test.js`). Existing files are overwritten.
 - Files matched by `config/.configignore` or `config/<repo>/.configignore` are not copied (see *Ignore file*). Without them nothing is ignored: dotfiles like `.env` or `.claude/` are copied, and so is `.DS_Store`.
-- `config/<repo>/install.sh` is not copied: it runs with cwd = the worktree, after the copy (build, install deps...). Its output goes to `tmp/worktree-config/<repo>/<name>-install.log`, not to the console.
+- `config/<repo>/install.sh` is not copied: it runs with cwd = the worktree, after the copy (build, install deps...). Its output goes to `tmp/worktree-config/<repo>/<name>/install.log`, not to the console.
 
 ## Procedure
 

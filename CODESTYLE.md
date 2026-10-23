@@ -61,6 +61,18 @@ Each of these has broken a script here that looked fine.
 - Body: what it does, `## Procedure` (a table of status → action) and `## Rules` (what the agent must never do).
 - Use the same words for the same thing: **worktree**, **source**, **base branch**, **slug** (`<repo>/<name>`).
 
+### Files in tmp/
+
+A skill that keeps files between runs (logs, pids, notes, reports) writes them in `tmp/<skill>/<key>/`, never loose in `tmp/` and never anywhere else in the repo. The key says what the files belong to, so they can be cleaned when that ends:
+
+| Files of… | Key | Removed by |
+|---|---|---|
+| a worktree | its slug, `<repo>/<name>` | `worktree-clean`, with the worktree |
+| a ticket | its id, `PROJ-123` | the skill that closes it: `tmp-clean.sh purge PROJ-123` |
+| a pull request | its number, `12` (or `PR-12`) | the skill that ends with it: `tmp-clean.sh purge 12` |
+
+Files `<key>.<ext>` next to the folder (`12.json`) count as the same key. Anything else is left to `tmp-clean`, which reports it as stale after 30 days. Tools that must last (scripts, references) do not belong in `tmp/`: put them in a skill.
+
 ### Continuous improvement
 
 A skill that opts in improves with use: when it learns something, it updates itself, in the moment, before going on with the task. It opts in with a `## Findings` section in its `SKILL.md` (see *Index* below).

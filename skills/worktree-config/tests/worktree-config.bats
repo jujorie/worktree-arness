@@ -256,7 +256,7 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -eq 0 ]
   [[ "$output" != *noisy* ]]
   [[ "$output" == *DONE* ]]
-  log="$ARNESS_ROOT/tmp/worktree-config/a/feat/x-install.log"
+  log="$ARNESS_ROOT/tmp/worktree-config/a/feat/x/install.log"
   grep -q noisy-install-output "$log"
   grep -q noisy-err "$log"
 }
@@ -272,7 +272,7 @@ teardown() { rm -rf "$TMP"; }
   cfg a install.sh 'echo boom; exit 3'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 7 ]
-  [[ "$output" == *"INSTALL_FAILED 3 "*"/tmp/worktree-config/a/feat/x-install.log"* ]]
+  [[ "$output" == *"INSTALL_FAILED 3 "*"/tmp/worktree-config/a/feat/x/install.log"* ]]
   [[ "$output" == *boom* ]]
   [ -f "$(WT a feat/x)/keep.txt" ]
 }
@@ -284,7 +284,7 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"line 100"* ]]
   [[ "$output" == *"line 81"* ]]
   [[ "$output" != *"line 80"* ]]
-  [ "$(grep -c '^line' "$ARNESS_ROOT/tmp/worktree-config/a/feat/x-install.log")" -eq 100 ]
+  [ "$(grep -c '^line' "$ARNESS_ROOT/tmp/worktree-config/a/feat/x/install.log")" -eq 100 ]
 }
 
 @test "an install.sh in a subfolder is a normal file" {
