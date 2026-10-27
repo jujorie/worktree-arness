@@ -8,7 +8,7 @@ allowed-tools: Bash(skills/npm-run/scripts/npm-run.sh *)
 
 > Use this skill; do not run `npm run`, `npm install` or the script on your own. The procedure below decides what to ask and when to stop.
 
-Runs `npm run <script> [-- <args>]` in `worktrees/<repo>/<name>`, in the background, with its output in a log and its pid saved, so it can be stopped later (with its child processes).
+Runs `npm run <script> [-- <args>]` in `worktrees/<repo>/<name>` (or in the clone `source/<repo>`, see below), in the background, with its output in a log and its pid saved, so it can be stopped later (with its child processes).
 All checks are done by `scripts/npm-run.sh` (in this skill's folder): the worktree exists, `package.json` is at its root, the script is a key of its `"scripts"`, and `node_modules` is there. Only npm; only the `package.json` at the worktree root.
 
 ## Procedure
@@ -16,6 +16,10 @@ All checks are done by `scripts/npm-run.sh` (in this skill's folder): the worktr
 1. From the user's message, extract:
    - **script**: the npm script name (`start`, `test`, `build:prod`). Never invent it or pick a similar one.
    - **worktree**: `<repo>/<name>`, optional (the script picks the only one there is).
+     To run in the clone `source/<repo>` itself, give `<repo>/<branch>` with the branch it has checked out
+     (e.g. `my-repo/develop`, when the user says "run it from source" or wants that branch, which no worktree
+     can hold while the clone has it). It is used only when no worktree has that name, and only if asked
+     with `--worktree`: it is never picked on its own.
    - **args**: extra arguments for the script, only if the user gives them; they go after `--`.
 2. Run from the repo root, passing only what you have:
    ```bash
@@ -36,7 +40,7 @@ All checks are done by `scripts/npm-run.sh` (in this skill's folder): the worktr
 | `INSTALLED <slug> <log>` | — | Comes before `STARTED`/`FINISHED`; report it. |
 | `INSTALL_FAILED <code> <log>` | 12 | Show the stderr lines. Do not retry. |
 | `ALREADY_RUNNING <slug> <script> <pid>` | 9 | Tell the user. Offer to stop it first; never start a second one. |
-| `NO_WORKTREE` / `NOT_FOUND <slug>` | 4 | No such worktree. Suggest the `worktree-create` skill, or check the slug. |
+| `NO_WORKTREE` / `NOT_FOUND <slug>` | 4 | No such worktree, and for `<repo>/<branch>` the clone is not on that branch. Suggest the `worktree-create` skill, or check the slug. Never switch the clone's branch to make it match. |
 | `NO_NPM` | 3 | npm is not installed. Finish. |
 | error on stderr | 2 | Invalid input (slug, script name, options). Show the message. |
 

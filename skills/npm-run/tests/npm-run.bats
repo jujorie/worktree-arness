@@ -16,10 +16,9 @@ mk_repo() {
   git_q -C "$ARNESS_ROOT/source/$1" commit -q -m c1
 }
 
-# mk_wt <repo> <name>: a worktree with a package.json and node_modules, laid out like worktree-create.
-mk_wt() {
-  git_q -C "$ARNESS_ROOT/source/$1" worktree add -q -b "$2" "$ARNESS_ROOT/worktrees/$1/$2" main
-  cat > "$ARNESS_ROOT/worktrees/$1/$2/package.json" <<'EOF'
+# mk_pkg <dir>: the fixture package.json and an empty node_modules.
+mk_pkg() {
+  cat > "$1/package.json" <<'EOF'
 {
   "name": "fixture",
   "version": "1.0.0",
@@ -32,7 +31,13 @@ mk_wt() {
   }
 }
 EOF
-  mkdir -p "$ARNESS_ROOT/worktrees/$1/$2/node_modules"
+  mkdir -p "$1/node_modules"
+}
+
+# mk_wt <repo> <name>: a worktree with a package.json and node_modules, laid out like worktree-create.
+mk_wt() {
+  git_q -C "$ARNESS_ROOT/source/$1" worktree add -q -b "$2" "$ARNESS_ROOT/worktrees/$1/$2" main
+  mk_pkg "$ARNESS_ROOT/worktrees/$1/$2"
 }
 
 WT() { echo "$ARNESS_ROOT/worktrees/$1"; }
@@ -65,6 +70,41 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$output" = "FINISHED a/feat/x ok 0 $(state a/feat/x)/ok.log" ]
   grep -q ran-ok "$(state a/feat/x)/ok.log"
+}
+
+@test "the clone in source/ runs when its checked-out branch is given and no worktree has that name" {
+  mk_pkg "$ARNESS_ROOT/source/a"
+  (cd "$ARNESS_ROOT/source/a" && npm pkg set scripts.where="pwd -P")
+  run "$SCRIPT" run --worktree a/main where
+  [ "$status" -eq 0 ]
+  [ "$output" = "FINISHED a/main where 0 $(state a/main)/where.log" ]
+  grep -qx "$ARNESS_ROOT/source/a" "$(state a/main)/where.log"
+}
+
+@test "the clone in source/ is never picked without --worktree" {
+  mk_pkg "$ARNESS_ROOT/source/a"
+  run "$SCRIPT" run ok
+  [ "$status" -eq 0 ]
+  [[ "$output" == "FINISHED a/feat/x ok 0 "* ]]
+}
+
+@test "a branch the clone in source/ is not on is NOT_FOUND" {
+  mk_pkg "$ARNESS_ROOT/source/a"
+  run "$SCRIPT" run --worktree a/develop ok
+  [ "$status" -eq 4 ]
+  [ "$output" = "NOT_FOUND a/develop" ]
+}
+
+@test "a script started in the clone in source/ is listed and stopped by its slug" {
+  mk_pkg "$ARNESS_ROOT/source/a"
+  run "$SCRIPT" run --worktree a/main serve
+  [ "$status" -eq 0 ]
+  [[ "$output" == "STARTED a/main serve "* ]]
+  run "$SCRIPT" ps
+  [[ "$output" == "RUNNING a/main serve "* ]]
+  run "$SCRIPT" stop --worktree a/main
+  [ "$status" -eq 0 ]
+  [[ "$output" == "STOPPED a/main serve "* ]]
 }
 
 @test "CHOOSE_WORKTREE lists every worktree when there are several" {

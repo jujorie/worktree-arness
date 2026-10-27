@@ -9,6 +9,9 @@
 #
 # The worktree is one of worktrees/<repo>/<name> made from a repo in source/. Without --worktree, the
 # only one there is used; with several, nothing runs and they are listed (CHOOSE_WORKTREE).
+# --worktree <repo>/<branch> with no such worktree runs in source/<repo> itself when that clone has
+# <branch> checked out: git does not let a worktree use the branch of the main clone (e.g. develop), and a
+# detached copy cannot be pulled. It is never picked without --worktree.
 # The script must be a key of "scripts" in the package.json at the root of the worktree (read with
 # `npm pkg get scripts`). It runs as `npm run <script> [-- <args>]`, cwd = the worktree, in its own
 # process group, so stop also ends its children (dev servers, watchers).
@@ -30,7 +33,8 @@
 #   NONE                                           ps / stop / clean: nothing to show, stop or remove
 #   CHOOSE_WORKTREE <repo>/<name>...               several worktrees, none given (exit 10)
 #   NO_WORKTREE                                    no worktree at all (exit 4)
-#   NOT_FOUND <repo>/<name>                        not a worktree of a repo in source/ (exit 4)
+#   NOT_FOUND <repo>/<name>                        not a worktree of a repo in source/, nor the branch of its
+#                                                  clone (exit 4)
 #   NO_PACKAGE_JSON <path>                         no package.json at the worktree root (exit 6)
 #   INVALID_PACKAGE_JSON <path>                    npm cannot read it (exit 6)
 #   NO_COMMAND <repo>/<name>                       no script given (exit 5)
@@ -98,7 +102,15 @@ list_worktrees() {
   done | LC_ALL=C sort
 }
 
+# source_on_branch <repo>/<branch>: 0 if source/<repo> is a clone with <branch> checked out.
+source_on_branch() {
+  local dir="$ROOT/source/${1%%/*}"
+  [ -e "$dir/.git" ] || return 1
+  [ "$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null)" = "${1#*/}" ]
+}
+
 # resolve_worktree <slug|"">: sets SLUG and WT, or stops with CHOOSE_WORKTREE / NO_WORKTREE / NOT_FOUND.
+# An explicit <repo>/<branch> with no worktree falls back to source/<repo> on that branch.
 resolve_worktree() {
   local want="$1" all
   all="$(list_worktrees)"
@@ -107,11 +119,15 @@ resolve_worktree() {
       */*) validate_name "$want" || die "invalid worktree: '$want' (expected <repo>/<name>)" ;;
       *)   die "invalid worktree: '$want' (expected <repo>/<name>)" ;;
     esac
-    if ! printf '%s\n' "$all" | grep -Fxq -- "$want"; then
+    SLUG="$want"
+    if printf '%s\n' "$all" | grep -Fxq -- "$want"; then
+      WT="$ROOT/worktrees/$SLUG"
+    elif source_on_branch "$want"; then
+      WT="$ROOT/source/${want%%/*}"
+    else
       echo "NOT_FOUND $want"
       exit "$EXIT_NO_WORKTREE"
     fi
-    SLUG="$want"
   elif [ -z "$all" ]; then
     echo "NO_WORKTREE"
     exit "$EXIT_NO_WORKTREE"
@@ -120,8 +136,8 @@ resolve_worktree() {
     exit "$EXIT_CHOOSE"
   else
     SLUG="$all"
+    WT="$ROOT/worktrees/$SLUG"
   fi
-  WT="$ROOT/worktrees/$SLUG"
   STATE="$ROOT/tmp/npm-run/$SLUG"
 }
 
@@ -388,7 +404,7 @@ main() {
   local cmd="$1"
   shift
   case "$cmd" in
-    -h|--help) sed -n '2,44p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     run|scripts|ps|stop|clean) ;;
     *) die "unknown command: $cmd" ;;
   esac

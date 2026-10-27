@@ -12,6 +12,7 @@ One folder per repo: `source/<repo>/`, a full git clone. These are the **origin*
 |---|---|---|
 | Clone a repo | `repo-clone <url>` | `source/<repo>/` (name derived from the URL, or `--name`) |
 | Work on a branch | `worktree-create` | `worktrees/<repo>/<name>/`, created from `source/<repo>` |
+| Run the branch the clone is on (e.g. a dev server of `develop`) | `npm-run --worktree <repo>/<branch>` | runs in `source/<repo>/`; no worktree can hold that branch while the clone has it |
 
 ## Rules
 
