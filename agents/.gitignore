@@ -1,5 +1,6 @@
-# Private by default, like skills/: only this file and .gitkeep are committed. Any other file is a local
-# agent of this machine, or a link to a plugin's agent (see plugins/README.md), and is never committed.
+# Private by default, like skills/: everything here is ignored except this file and the README.
+# Any other file is a local agent of this machine, or a link to a plugin's agent (see plugins/README.md),
+# and is never committed. A new shared agent needs its line below (one per agent, no globs).
 /*
 !/.gitignore
-!/.gitkeep
+!/README.md

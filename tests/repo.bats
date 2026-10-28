@@ -224,3 +224,10 @@ mk_git_root() {
     ! git -C "$REPO_ROOT" check-ignore -q "skills/$name/SKILL.md"
   done < <(git -C "$REPO_ROOT" ls-files skills | cut -d/ -f2 | sort -u | grep -v '^README.md$')
 }
+
+@test "unlisted agents are git-ignored and the agents README is not" {
+  git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout"
+  git -C "$REPO_ROOT" check-ignore -q agents/anything-else.md
+  ! git -C "$REPO_ROOT" check-ignore -q agents/README.md
+  ! git -C "$REPO_ROOT" check-ignore -q agents/.gitignore
+}
