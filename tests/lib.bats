@@ -145,3 +145,29 @@ teardown() { cleanup_sandbox; }
   [ ! -s "$FAKE_CALLS" ]
   [ "$(readlink "$SANDBOX/.claude/skills")" = "../skills" ]
 }
+
+@test "render without plugins drops the plugin rules marker line" {
+  with_lib 'render providers/claude/settings.json .claude/settings.json'
+  ! grep -qF 'PLUGIN_ALLOW' "$SANDBOX/.claude/settings.json"
+  [ "$(grep -c . "$SANDBOX/.claude/settings.json")" -eq "$(( $(grep -c . "$SANDBOX/providers/claude/settings.json") - 1 ))" ]
+  json_looks_valid "$SANDBOX/.claude/settings.json"
+}
+
+@test "render inserts each plugin's Skill and allow.claude rules" {
+  mkdir -p "$SANDBOX/plugins/demo"
+  printf '%s\n' 'name=demo' 'skills=demo-a demo-b' 'allow.claude=Bash(demo-tool *)' 'allow.claude=Read(/x/**)' \
+    > "$SANDBOX/plugins/demo/arness-plugin.conf"
+  with_lib 'render providers/claude/settings.json .claude/settings.json'
+  for rule in 'Skill(demo-a)' 'Skill(demo-b)' 'Bash(demo-tool *)' 'Read(/x/**)'; do
+    grep -qxF "      \"$rule\"," "$SANDBOX/.claude/settings.json"
+  done
+  json_looks_valid "$SANDBOX/.claude/settings.json"
+}
+
+@test "conf_value prints every value of a key and nothing for a missing file" {
+  printf '%s\n' 'a=1' 'ab=2' 'a=x=y' '# a=3' > "$SANDBOX/c.conf"
+  run with_lib 'conf_value "$ARNESS_ROOT/c.conf" a'
+  [ "$output" = "$(printf '1\nx=y')" ]
+  run with_lib 'conf_value "$ARNESS_ROOT/missing.conf" a'
+  [ "$status" -eq 0 ] && [ -z "$output" ]
+}

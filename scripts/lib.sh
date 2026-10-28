@@ -65,14 +65,40 @@ copy_once() {
   fi
 }
 
+# conf_value <file> <key>: the values of <key> in a KEY=value file, one per line (none if missing).
+conf_value() {
+  [ -f "$1" ] || return 0
+  K="$2" awk 'index($0, ENVIRON["K"] "=") == 1 { print substr($0, length(ENVIRON["K"]) + 2) }' "$1"
+}
+
+# plugin_allow_claude: Claude Code rules of the plugins in plugins/ (see plugins/README.md), one per
+# line: Skill(<s>) for each of their skills, then their allow.claude rules.
+plugin_allow_claude() {
+  local conf s
+  for conf in "$ARNESS_ROOT"/plugins/*/arness-plugin.conf; do
+    [ -f "$conf" ] || continue
+    for s in $(conf_value "$conf" skills); do printf 'Skill(%s)\n' "$s"; done
+    conf_value "$conf" allow.claude
+  done
+}
+
 # render <src> <dest>: write src (relative to ARNESS_ROOT) to dest, replacing
-# {{$ARNESS_ROOT}} with the absolute repo path. Regenerated on every run; an
-# existing different dest is kept once as <dest>.bak.
+# {{$ARNESS_ROOT}} with the absolute repo path, and a line holding {{$PLUGIN_ALLOW}}
+# with one "<rule>", line per plugin rule at its indentation (no line when there are
+# none). Regenerated on every run; an existing different dest is kept once as <dest>.bak.
 render() {
-  local src="$ARNESS_ROOT/$1" dest="$ARNESS_ROOT/$2" tmp esc
+  local src="$ARNESS_ROOT/$1" dest="$ARNESS_ROOT/$2" tmp esc rules
   esc=$(printf '%s' "$ARNESS_ROOT" | sed -e 's/[\\&|]/\\&/g')
+  rules="$(plugin_allow_claude)"
   tmp=$(mktemp)
-  sed "s|{{\$ARNESS_ROOT}}|$esc|g" "$src" > "$tmp"
+  sed "s|{{\$ARNESS_ROOT}}|$esc|g" "$src" | RULES="$rules" awk -v mark='{{$PLUGIN_ALLOW}}' '
+    index($0, mark) {
+      ind = substr($0, 1, index($0, mark) - 1)
+      n = split(ENVIRON["RULES"], r, "\n")
+      for (i = 1; i <= n; i++) if (r[i] != "") print ind "\"" r[i] "\","
+      next
+    }
+    { print }' > "$tmp"
   mkdir -p "$(dirname "$dest")"
   if [ -f "$dest" ] && ! cmp -s "$tmp" "$dest"; then
     cp "$dest" "$dest.bak"

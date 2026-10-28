@@ -28,3 +28,7 @@ ln -s ~/src/my-skills/foo skills/foo
   - OpenCode: `opencode.json` at the repo root, `permission.skill`: `"foo": "allow"`. Its bash rule for `skills/*/scripts/*.sh` already covers the script.
 - Do not mention local skills, or what is in them, in committed files.
 - To see what is local: `git status --ignored skills/`.
+
+## Plugin skills
+
+Links named `<prefix>-<name>` that point into `plugins/` are skills of an installed plugin. They are local like the skills above, and managed with the `plugin-manage` skill: do not create or remove them by hand. See `plugins/README.md`.

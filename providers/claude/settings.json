@@ -3,12 +3,14 @@
   "autoMemoryDirectory": "{{$ARNESS_ROOT}}/.memory",
   "permissions": {
     "allow": [
+      {{$PLUGIN_ALLOW}}
       "Skill(repo-clone)",
       "Skill(worktree-create)",
       "Skill(worktree-clean)",
       "Skill(worktree-config)",
       "Skill(npm-run)",
       "Skill(learnings-save)",
+      "Skill(plugin-manage)",
       "Bash(skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash(skills/worktree-create/scripts/worktree-create.sh *)",
@@ -18,7 +20,9 @@
       "Bash(skills/worktree-config/scripts/worktree-config.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/worktree-config/scripts/worktree-config.sh *)",
       "Bash(skills/npm-run/scripts/npm-run.sh *)",
-      "Bash({{$ARNESS_ROOT}}/skills/npm-run/scripts/npm-run.sh *)"
+      "Bash({{$ARNESS_ROOT}}/skills/npm-run/scripts/npm-run.sh *)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh *)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh *)"
     ]
   }
 }
