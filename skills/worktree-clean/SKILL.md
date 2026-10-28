@@ -40,7 +40,7 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
    skills/worktree-clean/scripts/worktree-clean.sh remove --source <repo> [--base <ref>] [--force] <name>...
    ```
    Before removing each worktree, `remove` stops the npm scripts the `npm-run` skill started in it (dev servers, watchers): once the folder is gone they would keep running and holding their ports. Scripts started by hand, outside `npm-run`, are not seen.
-   After removing it, `remove` also deletes what any skill kept for it in `tmp/<skill>/<repo>/<name>` (logs, pids, notes): one `PURGED <tmp path>` line each.
+   After removing it, `remove` also deletes what any skill kept for it in `tmp/<skill>/<repo>/<name>` (logs, pids, notes): one `PURGED <tmp path>` line each. With `--force` too: the logs of the unmerged work go with it, so say so in the `--force` confirmation of step 4.
 6. Report each `STOPPED <repo>/<name> <script> <pid>`, each `REMOVED <path>` (with its `PURGED` lines, in one line: "and its files in tmp") and each `SKIPPED <path> <reason>` (exit 13 means at least one skipped). `stop-failed`: its npm scripts could not be stopped, so the worktree was kept; show the `warning:` from stderr.
 
 ## Rules

@@ -771,6 +771,17 @@ mk_npm_state() {
   [ -d "$ARNESS_ROOT/tmp/other-skill" ]              # tmp/<skill> itself is kept
 }
 
+@test "remove --force purges the tmp state of an unmerged worktree too" {
+  mk_repo a
+  mk_wt a open commit
+  mkdir -p "$ARNESS_ROOT/tmp/worktree-config/a/open"
+  run "$SCRIPT" remove --source a --force open
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == REMOVED*/worktrees/a/open ]]
+  [ "${lines[1]}" = "PURGED tmp/worktree-config/a/open" ]
+  [ ! -e "$ARNESS_ROOT/tmp/worktree-config/a" ]
+}
+
 @test "a skipped worktree keeps its tmp state" {
   mk_repo a
   mk_wt a open commit

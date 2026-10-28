@@ -14,8 +14,7 @@
       "worktree-clean": "allow",
       "worktree-config": "allow",
       "npm-run": "allow",
-      "learnings-save": "allow",
-      "tmp-clean": "allow"
+      "learnings-save": "allow"
     }
   }
 }
