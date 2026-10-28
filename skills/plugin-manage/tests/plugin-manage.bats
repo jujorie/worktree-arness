@@ -267,7 +267,7 @@ check_with() {
   [ "$status" -eq 4 ] && [ "$output" = "ARNESS_VERSION 2" ]
 }
 
-@test "check accepts * for a provided command and literal arguments for a required one" {
+@test "check accepts rules for a provided command and none for a required one" {
   for rule in 'allow.claude=Bash(demo-tool)' 'allow.claude=Bash(demo-tool run *)' 'allow.opencode=demo-tool run --fast *'; do
     check_with "$rule"
     [ "$status" -eq 0 ] || { echo "$rule: $output"; false; }
@@ -275,10 +275,7 @@ check_with() {
   write_conf; edit_conf 's/^requires=.*/requires=git true/'
   printf '%s\n' 'allow.claude=Bash(true --version)' >> "$ORIGIN/arness-plugin.conf"
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 0 ]
-  printf '%s\n' 'allow.claude=Bash(true *)' >> "$ORIGIN/arness-plugin.conf"
-  run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(true *): * only for a command in provides" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(true --version): true is not in provides" ]
 }
 
 @test "check rejects every rule outside the allowed shapes" {
@@ -309,11 +306,32 @@ check_with() {
   [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST provides: python3 runs arbitrary code" ]
 }
 
-@test "check rejects a rule for a command neither required nor provided" {
+@test "check rejects a rule for a command the plugin does not provide, required ones included" {
   check_with 'allow.opencode=rm *'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE opencode rm *: rm is not in requires or provides" ]
-  check_with 'allow.claude=Bash(rm -rf x)'
-  [ "$status" -eq 4 ] && [[ "$output" == *"rm is not in requires or provides" ]]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE opencode rm *: rm is not in provides" ]
+  write_conf; edit_conf 's/^requires=.*/requires=git rm/'
+  printf '%s\n' 'allow.claude=Bash(rm -rf /)' >> "$ORIGIN/arness-plugin.conf"
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(rm -rf /): rm is not in provides" ]
+}
+
+@test "the example manifest in plugins/README.md passes check" {
+  ex="$BATS_TEST_TMPDIR/example"
+  mkdir -p "$ex"
+  awk '/^```/ { if (inb) exit; inb = 0; next } /^name=my-plugin$/ { inb = 1 } inb' "$REPO_ROOT/plugins/README.md" \
+    > "$ex/arness-plugin.conf"
+  grep -qx 'name=my-plugin' "$ex/arness-plugin.conf"
+  for n in $(sed -n 's/^skills=//p' "$ex/arness-plugin.conf"); do
+    mkdir -p "$ex/skills/$n"; printf -- '---\nname: %s\n---\n' "$n" > "$ex/skills/$n/SKILL.md"
+  done
+  mkdir -p "$ex/agents"
+  for n in $(sed -n 's/^agents=//p' "$ex/arness-plugin.conf"); do printf -- '---\nname: %s\n---\n' "$n" > "$ex/agents/$n.md"; done
+  for c in $(sed -n 's/^requires=//p' "$ex/arness-plugin.conf"); do
+    command -v "$c" >/dev/null || { printf '#!/bin/sh\n' > "$BATS_TEST_TMPDIR/bin/$c"; chmod +x "$BATS_TEST_TMPDIR/bin/$c"; }
+  done
+  run "$SCRIPT" check "$ex"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "VALID my-plugin 0.1.0" ]
 }
 
 @test "check rejects a skill or agent without the prefix, missing or misnamed" {

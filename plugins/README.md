@@ -70,15 +70,11 @@ allow.opencode=my-tool *
 
 ### Permission rules
 
-A rule is `Bash(<command> [args])` (OpenCode: `<command> [args]`), with literal arguments only: no quotes, `$`, `;`, `&`, `|` or wildcards, except a final ` *`. What the command may be:
+A rule is `Bash(<command> [args])` (OpenCode: `<command> [args]`) for a `<command>` listed in `provides`: the plugin's own CLI, which runs the plugin's code anyway. Arguments are literal (no quotes, `$`, `;`, `&`, `|` or wildcards), except a final ` *`: `Bash(my-tool *)`, `Bash(my-tool check *)`.
 
-| Command | Final ` *` | Example |
-|---|---|---|
-| One of `provides` (the plugin's own CLI: it runs the plugin's code anyway) | allowed | `Bash(my-tool *)` |
-| One of `requires` (a system command) | not allowed: literal arguments only | `Bash(uv --version)` |
-| Anything else | rejected | `Bash(rm -rf x)` |
+System commands from `requires` get no rules: `Bash(uv --version)` or `Bash(rm -rf x)` is `BAD_RULE`. The agent asks before running them, as it does for any command.
 
-A command that runs arbitrary code from its arguments is always rejected, with or without ` *`: shells, `env`, `sudo`, `xargs`, `git`, `find`, `ssh`, `curl`, `docker`, package managers (`uv`, `npm`, `pip`, `cargo`, `go`...) and interpreters, versioned names included (`python3.12`, `node20`, `gawk`). See `RUNNERS` and `RUNNER_RE` in the script. Other tools (`Read(...)`, `Write(...)`, `WebFetch(...)`) are not accepted at all. Any violation is `BAD_RULE`.
+A command that runs arbitrary code from its arguments is also refused in `provides`: shells, `env`, `sudo`, `xargs`, `git`, `find`, `ssh`, `curl`, `docker`, package managers (`uv`, `npm`, `pip`, `cargo`, `go`...) and interpreters, versioned names included (`python3.12`, `node20`, `gawk`). See `RUNNERS` and `RUNNER_RE` in the script. Other tools (`Read(...)`, `Write(...)`, `WebFetch(...)`) are not accepted at all. Any violation is `BAD_RULE`. The example manifest above is checked by the tests (`plugin-manage.bats`), so it always passes `check`.
 
 ## Providers
 

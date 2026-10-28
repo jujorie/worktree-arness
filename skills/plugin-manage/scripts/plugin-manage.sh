@@ -67,8 +67,8 @@ CONTRACT=1
 MANIFEST=arness-plugin.conf
 SLUG_RE='^[a-z0-9]+(-[a-z0-9]+)*$'
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
-# Allowed rule shapes: one command, optional literal arguments, optional trailing " *" (only for a
-# command the plugin provides itself).
+# Allowed rule shapes: one command (one the plugin provides), optional literal arguments, optional
+# trailing " *".
 CLAUDE_RULE_RE='^Bash\(([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?\)$'
 OPENCODE_RULE_RE='^([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?$'
 # Commands that run arbitrary code from their arguments: no rule may name them, even with literal
@@ -180,11 +180,11 @@ is_runner() {
   [[ $1 =~ $RUNNER_RE ]]
 }
 
-# check_rule <provider> <rule>: an allowlist. A rule names one command that is not a command runner:
-#   - a command the plugin provides (installed by its install): any arguments, " *" allowed;
-#   - a command it requires from the system: literal arguments only, no " *".
+# check_rule <provider> <rule>: an allowlist. A rule names one command the plugin provides (installed
+# by its own install, so it runs the plugin's code anyway), never a system command from requires, and
+# never a command runner.
 check_rule() {
-  local provider="$1" rule="$2" re cmd star
+  local provider="$1" rule="$2" re cmd
   if [ "$provider" = claude ]; then re="$CLAUDE_RULE_RE"; else re="$OPENCODE_RULE_RE"; fi
   if ! [[ $rule =~ $re ]]; then
     if [ "$provider" = claude ]; then
@@ -193,12 +193,10 @@ check_rule() {
     fail "$EXIT_INVALID" "BAD_RULE opencode $rule: not <command> [args] [*]"
   fi
   cmd="${BASH_REMATCH[1]}"
-  star="${BASH_REMATCH[4]}"
   if is_runner "$cmd"; then fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd runs arbitrary code"; fi
-  case " $M_PROVIDES " in *" $cmd "*) return 0 ;; esac
-  case " $M_REQUIRES " in
-    *" $cmd "*) [ -z "$star" ] || fail "$EXIT_INVALID" "BAD_RULE $provider $rule: * only for a command in provides" ;;
-    *) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd is not in requires or provides" ;;
+  case " $M_PROVIDES " in
+    *" $cmd "*) ;;
+    *) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd is not in provides" ;;
   esac
 }
 
