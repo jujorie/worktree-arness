@@ -21,8 +21,18 @@
       "Bash({{$ARNESS_ROOT}}/skills/worktree-config/scripts/worktree-config.sh *)",
       "Bash(skills/npm-run/scripts/npm-run.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/npm-run/scripts/npm-run.sh *)",
-      "Bash(skills/plugin-manage/scripts/plugin-manage.sh *)",
-      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh *)"
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh add *)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh add *)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh update *)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh update *)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh remove *)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh remove *)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh list)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh list)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh check *)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh check *)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh sync)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh sync)"
     ]
   }
 }

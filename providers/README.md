@@ -24,7 +24,8 @@ providers/<provider>/
 - Run `./setup.sh --provider <name>` from the repo root (`claude`, `codex`, `opencode`, a comma list, `all` or `auto`). It runs `providers/<name>/setup.sh` for each one. See the root `README.md`.
 - Edit the sources here and re-run setup. Never edit the generated files: `.claude/`, `.agents/`, `CLAUDE.md`, `opencode.json`.
 - Templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path at setup time (`render` in `scripts/lib.sh`). Never put machine-specific paths in them.
-- A line holding `{{$PLUGIN_ALLOW}}` in `providers/claude/settings.json` is replaced by the Claude Code rules of the installed plugins (`plugins/README.md`), one per line, and dropped when there are none. Keep it as the first entry of `permissions.allow`.
+- A line holding `{{$PLUGIN_ALLOW}}` in `providers/claude/settings.json` is replaced by the Claude Code rules of the installed plugins, read from `plugins/.<name>.state` (`plugins/README.md`), one per line, and dropped when there are none. It must stay the first entry of `permissions.allow` (`tests/repo.bats` checks it).
+- A skill whose script has a subcommand that writes (`plugin-manage.sh apply`) allows only its other subcommands, so the agent asks before that one runs. Never add `plugin-manage.sh *` or `plugin-manage.sh apply *` here; OpenCode keeps an explicit `"ask"` rule for it after its `skills/*/scripts/*.sh` rules.
 - Permissions that let agents run the skills' scripts without asking live here too: `permissions.allow` in `providers/claude/settings.json` and `permission` in `providers/opencode/opencode.json`. A new skill with a script needs its entries added.
 
 ## Adding a provider

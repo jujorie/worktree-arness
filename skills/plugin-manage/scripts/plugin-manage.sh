@@ -3,49 +3,59 @@
 # into plugins/<name>, whose skills and agents are linked into skills/ and agents/ and whose Claude Code
 # permission rules are rendered into .claude/settings.json. See plugins/README.md.
 #
-# Usage: plugin-manage.sh add [--ref REF] [--commit SHA] [--yes] <url>
-#        plugin-manage.sh update [--ref REF] [--commit SHA] [--no-fetch] [--yes] <name>
-#        plugin-manage.sh remove [--force] [--yes] <name>
+# Usage: plugin-manage.sh add [--ref REF] <url>                       plan only, writes nothing
+#        plugin-manage.sh update [--ref REF] [--no-fetch] <name>      plan only (fetches)
+#        plugin-manage.sh remove <name>                               plan only
+#        plugin-manage.sh apply add --commit SHA [--ref REF] <url>
+#        plugin-manage.sh apply update --commit SHA [--ref REF] <name>
+#        plugin-manage.sh apply remove [--force] <name>
 #        plugin-manage.sh list
 #        plugin-manage.sh check <dir>
 #        plugin-manage.sh sync
 #
-# Without --yes, add, update and remove only print the plan and a CONFIRM_* line; nothing is written.
+# add, update and remove only print the plan. Only `apply` changes anything; it is kept out of the
+# permission allowlists on purpose, so the agent's own tool prompt asks the user before it runs.
+# What arness uses of an installed plugin (rules, links, uninstall) comes from plugins/.<name>.state,
+# written by apply from the validated manifest, never from the clone's files as they are now.
 #
 # Stdout (machine readable), first word is the status:
 #   PLUGIN <name> <version> <commit>      plan header
+#   SOURCE <url|-> <ref> <branch|tag|commit>
+#   DESCRIPTION <text> | REQUIRES <commands>
 #   SKILL <name> | AGENT <name>           what the plugin links
-#   ALLOW <provider> <rule>               permission rule the plugin asks for (claude, opencode)
-#   NEW_ALLOW <provider> <rule>           update: rule the installed version did not ask for
-#   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder once confirmed
-#   CONFIRM_ADD <name> <commit>           rerun with --yes --commit <commit> (exit 20)
-#   CONFIRM_UPDATE <name> <from> <to>     rerun with --yes --commit <to> (exit 20)
-#   CONFIRM_REMOVE <name>                 rerun with --yes (exit 20)
+#   ALLOW <provider> <rule>               rule rendered (claude) or to add by hand (opencode)
+#   NEW_ALLOW <provider> <rule>           update: rule the installed version did not have
+#   OPENCODE_AUTO_ALLOW <path>            a plugin skill script OpenCode runs without asking
+#                                         (its skills/*/scripts/*.sh rule)
+#   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder by apply
+#   CONFIRM_ADD <name> <commit>           plan printed; nothing written (exit 20)
+#   CONFIRM_UPDATE <name> <from> <to> <ref>   plan printed; nothing written (exit 20)
+#   CONFIRM_REMOVE <name>                 plan printed; nothing written (exit 20)
 #   ADDED <name> <path>                   cloned, linked, rules rendered, install run
 #   UPDATED <name> <from> <to>            moved to <to>, links and rules refreshed, install run
-#   UP_TO_DATE <name> <commit>            update: nothing new
-#   REMOVED <name>                        uninstall run, links, clone and rules gone
-#   MANUAL opencode <rule>                add it to opencode.json yourself: setup never edits that file
+#   UP_TO_DATE <name> <commit> <ref>      update: nothing new
+#   REMOVED <name>                        uninstall run, links, clone, state and rules gone
+#   MANUAL opencode <bash|skill> <entry>  add it to opencode.json yourself: setup never edits that file
 #   VALID <name> <version>                check passed
-#   INSTALLED <name> <version> <commit> <state> <skills> <agents>
-#                                         list line; state OK|BROKEN_LINK|DIRTY|INSTALL_FAILED,
-#                                         skills and agents as linked/declared
+#   INSTALLED <name> <version> <commit> <ref> <state> <skills> <agents>
+#                                         list line; state OK|BROKEN_LINK|MODIFIED|INSTALL_FAILED|UNMANAGED,
+#                                         skills and agents as linked/declared; "-" for an unknown value
 #   NONE                                  list: no plugins
 #   SYNCED <name>                         sync restored the plugin's links
 #   BAD_MANIFEST <detail>                 manifest syntax or field error (exit 4)
 #   INVALID <detail>                      a declared skill or agent is missing or misnamed (exit 4)
 #   ARNESS_VERSION <value>                unsupported plugin contract (exit 4)
-#   BROAD_PERMISSION <provider> <rule>    rule too broad to grant (exit 4)
+#   BAD_RULE <provider> <rule>: <why>     rule outside the allowed shapes (exit 4)
 #   MISSING_REQUIREMENT <command>         a required command is not installed (exit 5)
 #   NAME_CONFLICT <path>                  a skill or agent of that name exists and is not this plugin's (exit 6)
 #   ALREADY_INSTALLED <name>              use update (exit 10)
-#   DIRTY <path> <why>                    uncommitted-changes, unpushed-commits or diverged (exit 11)
+#   DIRTY <path> <why>                    uncommitted-changes or moved (HEAD is not the applied commit) (exit 11)
 #   NOT_INSTALLED <name>                  (exit 12)
 #   INSTALL_FAILED <name>                 install command failed; clone and links kept (exit 13)
-#   MISMATCH <expected> <actual>          --commit is not what the ref points to now (exit 14)
+#   MISMATCH <expected> <actual>          --commit is not what the plan resolved to (exit 14)
 # Exit codes: 0 ok, 2 invalid usage, 3 clone or fetch failed, 4 invalid plugin, 5 missing requirement,
 #   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch,
-#   20 confirmation needed.
+#   20 plan printed, confirmation needed.
 set -euo pipefail
 
 EXIT_USAGE=2 EXIT_GIT=3 EXIT_INVALID=4 EXIT_REQUIREMENT=5 EXIT_CONFLICT=6
@@ -55,7 +65,12 @@ CONTRACT=1
 MANIFEST=arness-plugin.conf
 SLUG_RE='^[a-z0-9]+(-[a-z0-9]+)*$'
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
-CLAUDE_RULE_RE='^[A-Za-z]+\((.+)\)$'
+# Allowed rule shapes: one command, optional literal arguments, optional trailing " *".
+CLAUDE_RULE_RE='^Bash\(([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?\)$'
+OPENCODE_RULE_RE='^([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?$'
+# Commands that run arbitrary code from their arguments: a rule for them would grant everything.
+RUNNERS=" bash sh zsh dash ksh fish csh tcsh env sudo su doas xargs eval exec command nohup time timeout"
+RUNNERS="$RUNNERS python python3 node ruby perl php lua deno bun npx pnpx uvx pipx osascript find awk sed git make "
 
 ROOT="" PLUGINS=""
 TMP_DIR=""   # global: the EXIT trap runs after main() returns
@@ -75,12 +90,13 @@ resolve_root() {
 
 # --- input validation --------------------------------------------------------
 
+# No plain http: the plugin's code runs on this machine, and --commit cannot detect a tampered clone.
 validate_url() {
   local url="$1"
   [ -n "$url" ] || return 1
   case "$url" in
     -*|*[[:space:]]*|*[[:cntrl:]]*|*://-*|*@-*) return 1 ;;
-    https://?*|http://?*|ssh://?*|file://?*|git@?*:?*) return 0 ;;
+    https://?*|ssh://?*|file://?*|git@?*:?*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -106,7 +122,7 @@ is_slug() { [[ $1 =~ $SLUG_RE ]]; }
 parse_manifest() {
   local file="$1" line key value n=0 seen=" "
   M_NAME="" M_VERSION="" M_PREFIX="" M_ARNESS="" M_DESC="" M_SKILLS="" M_AGENTS="" M_REQUIRES=""
-  M_INSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE=""
+  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE=""
   [ -f "$file" ] || fail "$EXIT_INVALID" "BAD_MANIFEST missing $MANIFEST"
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -136,43 +152,38 @@ parse_manifest() {
       agents)      M_AGENTS="$value" ;;
       requires)    M_REQUIRES="$value" ;;
       install)     M_INSTALL="$value" ;;
-      uninstall)   ;;   # remove reads it leniently, with conf_value
+      uninstall)   M_UNINSTALL="$value" ;;
     esac
   done < "$file"
 }
 
-# check_rule <provider> <rule>: BAD_MANIFEST for a rule that would break the JSON, BROAD_PERMISSION for a
-# wildcard that grants more than one command.
+# check_rule <provider> <rule>: an allowlist, not a denylist. A rule is one command the plugin
+# requires, not a command runner, with optional literal arguments and an optional trailing " *".
 check_rule() {
-  local provider="$1" rule="$2" inner
-  case "$rule" in
-    *'"'*|*\\*|*[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_MANIFEST allow.$provider: quote, backslash or control character in $rule" ;;
-  esac
-  if [ "$provider" = claude ]; then
-    if [[ $rule =~ ^[A-Za-z]+$ ]]; then fail "$EXIT_INVALID" "BROAD_PERMISSION claude $rule"; fi
-    [[ $rule =~ $CLAUDE_RULE_RE ]] || fail "$EXIT_INVALID" "BAD_MANIFEST allow.claude: not Tool(pattern): $rule"
-    inner="${BASH_REMATCH[1]}"
-  else
-    inner="$rule"
+  local provider="$1" rule="$2" re cmd
+  if [ "$provider" = claude ]; then re="$CLAUDE_RULE_RE"; else re="$OPENCODE_RULE_RE"; fi
+  if ! [[ $rule =~ $re ]]; then
+    if [ "$provider" = claude ]; then
+      fail "$EXIT_INVALID" "BAD_RULE claude $rule: not Bash(<command> [args] [*])"
+    fi
+    fail "$EXIT_INVALID" "BAD_RULE opencode $rule: not <command> [args] [*]"
   fi
-  case "$inner" in
-    ""|"*"*|" "*) fail "$EXIT_INVALID" "BROAD_PERMISSION $provider $rule" ;;
-  esac
+  cmd="${BASH_REMATCH[1]}"
+  case "$RUNNERS" in *" $cmd "*) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd runs arbitrary code" ;; esac
+  case " $M_REQUIRES " in *" $cmd "*) ;; *) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd is not in requires" ;; esac
 }
 
-# check_names <kind> <list> <dir>: every name is a slug with the plugin prefix and exists in the plugin.
+# check_names <kind> <list> <dir>: every name is a slug with the plugin prefix, exists in the plugin and
+# carries the same name in its frontmatter (else the provider would load it under another name, or not).
 check_names() {
-  local kind="$1" list="$2" dir="$3" n
+  local kind="$1" list="$2" dir="$3" n file
   case "$list" in *[!a-z0-9\ -]*) fail "$EXIT_INVALID" "BAD_MANIFEST $kind: names must be lowercase slugs" ;; esac
   for n in $list; do
     is_slug "$n" || fail "$EXIT_INVALID" "BAD_MANIFEST $kind: invalid name $n"
     case "$n" in "$M_PREFIX"?*) ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST $kind: $n lacks prefix $M_PREFIX" ;; esac
-    if [ "$kind" = skills ]; then
-      [ -f "$dir/skills/$n/SKILL.md" ] || fail "$EXIT_INVALID" "INVALID skills/$n/SKILL.md not found"
-      grep -qx "name: $n" "$dir/skills/$n/SKILL.md" || fail "$EXIT_INVALID" "INVALID skills/$n/SKILL.md lacks 'name: $n'"
-    else
-      [ -f "$dir/agents/$n.md" ] || fail "$EXIT_INVALID" "INVALID agents/$n.md not found"
-    fi
+    if [ "$kind" = skills ]; then file="skills/$n/SKILL.md"; else file="agents/$n.md"; fi
+    [ -f "$dir/$file" ] || fail "$EXIT_INVALID" "INVALID $file not found"
+    grep -qx "name: $n" "$dir/$file" || fail "$EXIT_INVALID" "INVALID $file lacks 'name: $n'"
   done
 }
 
@@ -191,6 +202,7 @@ validate_plugin() {
   case "$M_PREFIX" in *-) is_slug "${M_PREFIX%-}" ;; *) false ;; esac \
     || fail "$EXIT_INVALID" "BAD_MANIFEST prefix: not a slug ending in -: $M_PREFIX"
   [ "${#M_DESC}" -le 200 ] || fail "$EXIT_INVALID" "BAD_MANIFEST description: longer than 200 characters"
+  case "$M_DESC$M_INSTALL$M_UNINSTALL" in *[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_MANIFEST control character in a value" ;; esac
   case "$M_REQUIRES" in *[!A-Za-z0-9._\ -]*) fail "$EXIT_INVALID" "BAD_MANIFEST requires: invalid command name" ;; esac
   check_names skills "$M_SKILLS" "$dir"
   check_names agents "$M_AGENTS" "$dir"
@@ -209,6 +221,13 @@ check_requirements() {
   done
 }
 
+# Claude Code rules arness grants for the plugin: Skill(<s>) for each skill, then its allow.claude rules.
+claude_rules() {
+  local n
+  for n in $M_SKILLS; do printf 'Skill(%s)\n' "$n"; done
+  printf '%s' "$M_ALLOW_CLAUDE"
+}
+
 print_rules() {
   local status="$1" provider="$2" rules="$3" rule
   while IFS= read -r rule; do
@@ -216,34 +235,84 @@ print_rules() {
   done <<< "$rules"
 }
 
+# print_plan <commit> <url> <ref> <kind> <dir>: everything the user consents to.
 print_plan() {
-  local commit="$1" n
-  echo "PLUGIN $M_NAME $M_VERSION $commit"
+  local n f
+  echo "PLUGIN $M_NAME $M_VERSION $1"
+  echo "SOURCE ${2:--} $3 $4"
+  echo "DESCRIPTION $M_DESC"
+  if [ -n "$M_REQUIRES" ]; then echo "REQUIRES $M_REQUIRES"; fi
   for n in $M_SKILLS; do echo "SKILL $n"; done
   for n in $M_AGENTS; do echo "AGENT $n"; done
-  print_rules ALLOW claude "$M_ALLOW_CLAUDE"
+  print_rules ALLOW claude "$(claude_rules)"
   print_rules ALLOW opencode "$M_ALLOW_OPENCODE"
+  for n in $M_SKILLS; do
+    for f in "$5/skills/$n/scripts/"*.sh; do
+      if [ -f "$f" ]; then echo "OPENCODE_AUTO_ALLOW skills/$n/scripts/$(basename "$f")"; fi
+    done
+  done
   if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
+  if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+}
+
+print_manual() {
+  local n
+  print_rules "MANUAL opencode" bash "$M_ALLOW_OPENCODE"
+  for n in $M_SKILLS; do echo "MANUAL opencode skill $n"; done
+}
+
+# --- state: what apply validated, the only source render, sync, list and remove trust ------------
+
+state_file() { printf '%s/.%s.state\n' "$PLUGINS" "$1"; }
+
+# write_state <name> <commit> <ref> <kind> <status>, from the validated M_* globals.
+write_state() {
+  local file tmp
+  file="$(state_file "$1")"
+  tmp="$file.tmp"
+  {
+    printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\n' "$2" "$3" "$4" "$5"
+    printf 'version=%s\nskills=%s\nagents=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_UNINSTALL"
+    claude_rules | awk 'NF { print "allow.claude=" $0 }'
+    printf '%s' "$M_ALLOW_OPENCODE" | awk 'NF { print "allow.opencode=" $0 }'
+  } > "$tmp"
+  mv "$tmp" "$file"
+}
+
+state_value() { conf_value "$(state_file "$1")" "$2" | awk 'NR == 1'; }
+
+set_status() {
+  local file tmp
+  file="$(state_file "$1")"
+  tmp="$file.tmp"
+  S="$2" awk '/^status=/ { print "status=" ENVIRON["S"]; next } { print }' "$file" > "$tmp"
+  mv "$tmp" "$file"
 }
 
 # --- links ---------------------------------------------------------------------
 
-# belongs_to <path> <name>: path is a link into plugins/<name>/.
+# belongs_to <path> <name>: path is a link that link_plugin made for plugins/<name>: its target starts
+# with ../plugins/<name>/ (or the absolute form a Windows junction reports). No substring match: a link
+# into any other folder called plugins/<name> is not ours.
 belongs_to() {
+  local t
   [ -L "$1" ] || return 1
-  case "$(readlink "$1")" in *"plugins/$2/"*) return 0 ;; esac
+  t="$(readlink "$1")"
+  case "$t" in "../plugins/$2/"*|"$ROOT/plugins/$2/"*) return 0 ;; esac
   return 1
 }
+
+taken() { [ -e "$1" ] || [ -L "$1" ]; }
 
 check_conflicts() {
   local name="$1" n p
   for n in $M_SKILLS; do
     p="$ROOT/skills/$n"
-    if [ -e "$p" ] || [ -L "$p" ]; then belongs_to "$p" "$name" || fail "$EXIT_CONFLICT" "NAME_CONFLICT skills/$n"; fi
+    if taken "$p"; then belongs_to "$p" "$name" || fail "$EXIT_CONFLICT" "NAME_CONFLICT skills/$n"; fi
   done
   for n in $M_AGENTS; do
     p="$ROOT/agents/$n.md"
-    if [ -e "$p" ] || [ -L "$p" ]; then belongs_to "$p" "$name" || fail "$EXIT_CONFLICT" "NAME_CONFLICT agents/$n.md"; fi
+    if taken "$p"; then belongs_to "$p" "$name" || fail "$EXIT_CONFLICT" "NAME_CONFLICT agents/$n.md"; fi
   done
 }
 
@@ -276,29 +345,31 @@ refresh_providers() {
   fi
 }
 
+# run_cmd <dir> <cmd>: run a plugin's install or uninstall command in its folder, without the git and
+# arness settings of this script. There is no time limit: a command that hangs blocks until interrupted.
+run_cmd() {
+  (cd "$1" && unset ARNESS_ROOT GIT_ALLOW_PROTOCOL GIT_TERMINAL_PROMPT && bash -c "$2") >&2
+}
+
 run_install() {
-  local name="$1" dir="$2" marker="$PLUGINS/.$1.install-failed"
-  if [ -n "$M_INSTALL" ]; then
-    if ! (cd "$dir" && bash -c "$M_INSTALL") >&2; then
-      : > "$marker"
-      fail "$EXIT_INSTALL" "INSTALL_FAILED $name"
-    fi
+  local name="$1" dir="$2"
+  if [ -n "$M_INSTALL" ] && ! run_cmd "$dir" "$M_INSTALL"; then
+    set_status "$name" install-failed
+    fail "$EXIT_INSTALL" "INSTALL_FAILED $name"
   fi
-  rm -f "$marker"
 }
 
 # --- git -----------------------------------------------------------------------
 
-# Echo why the clone must not be touched; empty when clean. Untracked files do not count: they are
-# usually what the plugin's install command built in its folder.
+# dirty_reason <dir> <applied-commit>: why the clone must not be touched; empty when clean. Untracked
+# files do not count: they are usually what the plugin's install command built in its folder.
 dirty_reason() {
-  local dir="$1"
+  local dir="$1" applied="$2"
   if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     echo "uncommitted-changes"; return
   fi
-  if git -C "$dir" rev-parse --verify --quiet '@{u}' >/dev/null 2>&1 \
-     && [ -n "$(git -C "$dir" log --oneline '@{u}..HEAD' 2>/dev/null)" ]; then
-    echo "unpushed-commits"
+  if [ -n "$applied" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" != "$applied" ]; then
+    echo "moved"
   fi
 }
 
@@ -313,167 +384,228 @@ new_tmp() {
   trap cleanup EXIT
 }
 
-# --- commands --------------------------------------------------------------------
+# resolve_ref <dir> <ref>: print "<commit> <ref> <kind>". An empty ref means the remote default branch.
+resolve_ref() {
+  local dir="$1" ref="$2" c
+  if [ -z "$ref" ]; then
+    ref="$(git -C "$dir" symbolic-ref --short -q refs/remotes/origin/HEAD || true)"
+    ref="${ref#origin/}"
+    [ -n "$ref" ] || die "the remote has no default branch; pass --ref"
+  fi
+  if c="$(git -C "$dir" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}")"; then echo "$c $ref branch"; return; fi
+  if c="$(git -C "$dir" rev-parse --verify --quiet "refs/tags/$ref^{commit}")"; then echo "$c $ref tag"; return; fi
+  if validate_commit "$ref" && c="$(git -C "$dir" rev-parse --verify --quiet "$ref^{commit}")"; then
+    echo "$c $c commit"; return
+  fi
+  die "ref not found: $ref"
+}
 
-cmd_add() {
-  local url="" ref="" expect="" yes=0
+# newest_tag <dir>: the highest version tag (git's version sort), empty when there is none.
+newest_tag() { git -C "$1" tag --list --sort=-v:refname | awk 'NR == 1'; }
+
+# export_tree <dir> <commit> <out>: the commit's files as checkout writes them (a private index;
+# unlike git archive, export-ignore and export-subst do not apply), without touching the clone.
+export_tree() {
+  mkdir -p "$3"
+  GIT_INDEX_FILE="$TMP_DIR/index" git -C "$1" read-tree "$2"
+  GIT_INDEX_FILE="$TMP_DIR/index" git -C "$1" --work-tree="$3" checkout-index -a -f
+}
+
+# --- add -----------------------------------------------------------------------------
+
+# prepare_add <url> <ref>: clone into a temp folder, check out, validate. Sets ADD_DIR, ADD_COMMIT,
+# ADD_REF and ADD_KIND, and the M_* globals.
+prepare_add() {
+  local url="$1" ref="$2" resolved
+  new_tmp
+  ADD_DIR="$TMP_DIR/repo"
+  git clone --quiet --no-checkout -- "$url" "$ADD_DIR" >&2 || { echo "error: git clone failed for $url" >&2; exit "$EXIT_GIT"; }
+  resolved="$(resolve_ref "$ADD_DIR" "$ref")"
+  ADD_COMMIT="${resolved%% *}"
+  resolved="${resolved#* }"
+  ADD_REF="${resolved% *}"
+  ADD_KIND="${resolved##* }"
+  git -C "$ADD_DIR" checkout --quiet --detach "$ADD_COMMIT" >&2
+  validate_plugin "$ADD_DIR"
+  check_requirements
+  if [ -e "$PLUGINS/$M_NAME" ] || [ -L "$PLUGINS/$M_NAME" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
+  check_conflicts "$M_NAME"
+}
+
+parse_add_args() {
+  ARG_URL="" ARG_REF="" ARG_COMMIT=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ref="$2"; shift 2 ;;
-      --commit) [ $# -ge 2 ] || die "--commit needs a value"; expect="$2"; shift 2 ;;
-      --yes)    yes=1; shift ;;
+      --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
+      --commit) [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
       -*)       die "unknown option: $1" ;;
-      *)        [ -z "$url" ] || die "only one URL allowed"; url="$1"; shift ;;
+      *)        [ -z "$ARG_URL" ] || die "only one URL allowed"; ARG_URL="$1"; shift ;;
     esac
   done
-  [ -n "$url" ] || die "missing plugin URL"
-  validate_url "$url" || die "invalid URL (allowed: https://, http://, ssh://, git@host:path, file://): $url"
-  if [ -n "$ref" ]; then validate_ref "$ref" || die "invalid --ref: $ref"; fi
-  if [ -n "$expect" ]; then validate_commit "$expect" || die "invalid --commit: $expect"; fi
+  [ -n "$ARG_URL" ] || die "missing plugin URL"
+  validate_url "$ARG_URL" || die "invalid URL (allowed: https://, ssh://, git@host:path, file://): $ARG_URL"
+  if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
+  if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
+}
 
-  new_tmp
-  local dir="$TMP_DIR/repo" commit dest
-  git clone --quiet -- "$url" "$dir" >&2 || { echo "error: git clone failed for $url" >&2; exit "$EXIT_GIT"; }
-  if [ -n "$ref" ]; then
-    git -C "$dir" checkout --quiet "$ref" >&2 || die "ref not found: $ref"
-  fi
-  commit="$(git -C "$dir" rev-parse HEAD)"
-  if [ -n "$expect" ]; then check_commit "$expect" "$commit"; fi
+cmd_add() {
+  parse_add_args "$@"
+  [ -z "$ARG_COMMIT" ] || die "--commit belongs to 'apply add'"
+  prepare_add "$ARG_URL" "$ARG_REF"
+  print_plan "$ADD_COMMIT" "$ARG_URL" "$ADD_REF" "$ADD_KIND" "$ADD_DIR"
+  fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT"
+}
 
-  validate_plugin "$dir"
-  check_requirements
-  dest="$PLUGINS/$M_NAME"
-  if [ -e "$dest" ] || [ -L "$dest" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
-  check_conflicts "$M_NAME"
-
-  if [ "$yes" -eq 0 ]; then
-    print_plan "$commit"
-    fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $commit"
-  fi
-
-  mv "$dir" "$dest"
+apply_add() {
+  parse_add_args "$@"
+  [ -n "$ARG_COMMIT" ] || die "apply add needs --commit <sha> from the plan (CONFIRM_ADD)"
+  prepare_add "$ARG_URL" "$ARG_REF"
+  check_commit "$ARG_COMMIT" "$ADD_COMMIT"
+  local dest="$PLUGINS/$M_NAME"
+  mv "$ADD_DIR" "$dest"
   link_plugin "$M_NAME" "$M_SKILLS" "$M_AGENTS"
+  write_state "$M_NAME" "$ADD_COMMIT" "$ADD_REF" "$ADD_KIND" ok
   refresh_providers
   run_install "$M_NAME" "$dest"
-  print_rules MANUAL opencode "$M_ALLOW_OPENCODE"
+  print_manual
   echo "ADDED $M_NAME $dest"
 }
 
-# resolve_target <dir> <ref>: the commit to update to: origin/<ref>, then <ref> (a tag), else the upstream.
-resolve_target() {
-  local dir="$1" ref="$2" c
-  if [ -n "$ref" ]; then
-    if c="$(git -C "$dir" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}")"; then echo "$c"; return; fi
-    if c="$(git -C "$dir" rev-parse --verify --quiet "$ref^{commit}")"; then echo "$c"; return; fi
-    die "ref not found: $ref"
-  fi
-  c="$(git -C "$dir" rev-parse --verify --quiet '@{u}^{commit}')" || die "no upstream to update from (installed at a tag?); pass --ref"
-  echo "$c"
-}
+# --- update ----------------------------------------------------------------------------
 
-cmd_update() {
-  local name="" ref="" expect="" yes=0 fetch=1
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --ref)      [ $# -ge 2 ] || die "--ref needs a value"; ref="$2"; shift 2 ;;
-      --commit)   [ $# -ge 2 ] || die "--commit needs a value"; expect="$2"; shift 2 ;;
-      --no-fetch) fetch=0; shift ;;
-      --yes)      yes=1; shift ;;
-      -*)         die "unknown option: $1" ;;
-      *)          [ -z "$name" ] || die "only one plugin name allowed"; name="$1"; shift ;;
-    esac
-  done
-  [ -n "$name" ] || die "missing plugin name"
-  is_slug "$name" || die "invalid plugin name: $name"
-  if [ -n "$ref" ]; then validate_ref "$ref" || die "invalid --ref: $ref"; fi
-  if [ -n "$expect" ]; then validate_commit "$expect" || die "invalid --commit: $expect"; fi
-
-  local dest="$PLUGINS/$name" why old target old_claude old_opencode rule
-  [ -d "$dest/.git" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
-  why="$(dirty_reason "$dest")"
-  if [ -n "$why" ]; then fail "$EXIT_DIRTY" "DIRTY $dest $why"; fi
+# prepare_update <name> <ref> <fetch>: check the clone, resolve the target, validate it from its tree.
+# Sets UP_DEST, UP_OLD, UP_TARGET, UP_REF, UP_KIND and the M_* globals of the new version. Prints
+# UP_TO_DATE and sets UP_NOOP=1 when there is nothing to do. (Not a return code: a function called
+# as `f || ...` runs without set -e.)
+prepare_update() {
+  local name="$1" ref="$2" fetch="$3" kind resolved why
+  UP_NOOP=0
+  UP_DEST="$PLUGINS/$name"
+  [ -d "$UP_DEST/.git" ] && [ -f "$(state_file "$name")" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
+  UP_OLD="$(state_value "$name" commit)"
+  why="$(dirty_reason "$UP_DEST" "$UP_OLD")"
+  if [ -n "$why" ]; then fail "$EXIT_DIRTY" "DIRTY $UP_DEST $why"; fi
   if [ "$fetch" -eq 1 ]; then
-    git -C "$dest" fetch --quiet --tags origin >&2 || { echo "error: git fetch failed in $dest" >&2; exit "$EXIT_GIT"; }
+    git -C "$UP_DEST" fetch --quiet --tags --force --prune origin >&2 \
+      || { echo "error: git fetch failed in $UP_DEST" >&2; exit "$EXIT_GIT"; }
   fi
-  old="$(git -C "$dest" rev-parse HEAD)"
-  target="$(resolve_target "$dest" "$ref")"
-  if [ -n "$expect" ]; then check_commit "$expect" "$target"; fi
-  if [ "$target" = "$old" ]; then echo "UP_TO_DATE $name $old"; return; fi
-
-  parse_manifest "$dest/$MANIFEST"
-  old_claude="$M_ALLOW_CLAUDE" old_opencode="$M_ALLOW_OPENCODE"
-  # Validate the new version from its tree before touching the clone.
+  if [ -z "$ref" ]; then
+    kind="$(state_value "$name" kind)"
+    case "$kind" in
+      branch) ref="$(state_value "$name" ref)" ;;
+      tag)    ref="$(newest_tag "$UP_DEST")"; [ -n "$ref" ] || die "$name follows tags, but the remote has none" ;;
+      *)      die "$name is pinned to a commit; pass --ref" ;;
+    esac
+  fi
+  resolved="$(resolve_ref "$UP_DEST" "$ref")"
+  UP_TARGET="${resolved%% *}"
+  resolved="${resolved#* }"
+  UP_REF="${resolved% *}"
+  UP_KIND="${resolved##* }"
+  if [ "$UP_TARGET" = "$UP_OLD" ] && [ "$UP_REF" = "$(state_value "$name" ref)" ]; then
+    echo "UP_TO_DATE $name $UP_OLD $UP_REF"
+    UP_NOOP=1
+    return 0
+  fi
   new_tmp
-  git -C "$dest" archive "$target" | tar -x -C "$TMP_DIR"
-  validate_plugin "$TMP_DIR"
+  export_tree "$UP_DEST" "$UP_TARGET" "$TMP_DIR/tree"
+  validate_plugin "$TMP_DIR/tree"
   [ "$M_NAME" = "$name" ] || fail "$EXIT_INVALID" "BAD_MANIFEST name changed from $name to $M_NAME"
   check_requirements
   check_conflicts "$name"
-
-  if [ "$yes" -eq 0 ]; then
-    print_plan "$target"
-    while IFS= read -r rule; do
-      if [ -n "$rule" ] && ! grep -qxF -- "$rule" <<< "$old_claude"; then echo "NEW_ALLOW claude $rule"; fi
-    done <<< "$M_ALLOW_CLAUDE"
-    while IFS= read -r rule; do
-      if [ -n "$rule" ] && ! grep -qxF -- "$rule" <<< "$old_opencode"; then echo "NEW_ALLOW opencode $rule"; fi
-    done <<< "$M_ALLOW_OPENCODE"
-    fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $old $target"
-  fi
-
-  if [ -n "$ref" ] && git -C "$dest" rev-parse --verify --quiet "refs/remotes/origin/$ref" >/dev/null; then
-    git -C "$dest" checkout --quiet -B "$ref" "origin/$ref" >&2
-  elif [ -n "$ref" ]; then
-    git -C "$dest" checkout --quiet --detach "$target" >&2
-  elif ! git -C "$dest" merge --quiet --ff-only '@{u}' >&2; then
-    fail "$EXIT_DIRTY" "DIRTY $dest diverged"
-  fi
-  unlink_plugin "$name"
-  link_plugin "$name" "$M_SKILLS" "$M_AGENTS"
-  refresh_providers
-  run_install "$name" "$dest"
-  print_rules MANUAL opencode "$M_ALLOW_OPENCODE"
-  echo "UPDATED $name $old $target"
 }
 
-cmd_remove() {
-  local name="" yes=0 force=0
+parse_name_args() {
+  ARG_NAME="" ARG_REF="" ARG_COMMIT="" ARG_FETCH=1 ARG_FORCE=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --yes)   yes=1; shift ;;
-      --force) force=1; shift ;;
-      -*)      die "unknown option: $1" ;;
-      *)       [ -z "$name" ] || die "only one plugin name allowed"; name="$1"; shift ;;
+      --ref)      [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
+      --commit)   [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
+      --no-fetch) ARG_FETCH=0; shift ;;
+      --force)    ARG_FORCE=1; shift ;;
+      -*)         die "unknown option: $1" ;;
+      *)          [ -z "$ARG_NAME" ] || die "only one plugin name allowed"; ARG_NAME="$1"; shift ;;
     esac
   done
-  [ -n "$name" ] || die "missing plugin name"
-  is_slug "$name" || die "invalid plugin name: $name"
+  [ -n "$ARG_NAME" ] || die "missing plugin name"
+  is_slug "$ARG_NAME" || die "invalid plugin name: $ARG_NAME"
+  if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
+  if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
+}
 
-  local dest="$PLUGINS/$name" conf why n uninstall
+cmd_update() {
+  parse_name_args "$@"
+  [ -z "$ARG_COMMIT" ] || die "--commit belongs to 'apply update'"
+  [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
+  local name="$ARG_NAME" state rule
+  prepare_update "$name" "$ARG_REF" "$ARG_FETCH"
+  if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
+  state="$(state_file "$name")"
+  print_plan "$UP_TARGET" "" "$UP_REF" "$UP_KIND" "$TMP_DIR/tree"
+  while IFS= read -r rule; do
+    if [ -n "$rule" ] && ! conf_value "$state" allow.claude | grep -qxF -- "$rule"; then echo "NEW_ALLOW claude $rule"; fi
+  done <<< "$(claude_rules)"
+  while IFS= read -r rule; do
+    if [ -n "$rule" ] && ! conf_value "$state" allow.opencode | grep -qxF -- "$rule"; then echo "NEW_ALLOW opencode $rule"; fi
+  done <<< "$M_ALLOW_OPENCODE"
+  fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $UP_OLD $UP_TARGET $UP_REF"
+}
+
+# No fetch: apply moves to what the plan fetched and showed, or reports MISMATCH.
+apply_update() {
+  parse_name_args "$@"
+  [ -n "$ARG_COMMIT" ] || die "apply update needs --commit <sha> from the plan (CONFIRM_UPDATE)"
+  [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
+  local name="$ARG_NAME"
+  prepare_update "$name" "$ARG_REF" 0
+  if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
+  check_commit "$ARG_COMMIT" "$UP_TARGET"
+  # Detached: no local branch is created or reset, so nothing local can be lost.
+  git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
+  unlink_plugin "$name"
+  link_plugin "$name" "$M_SKILLS" "$M_AGENTS"
+  write_state "$name" "$UP_TARGET" "$UP_REF" "$UP_KIND" ok
+  refresh_providers
+  run_install "$name" "$UP_DEST"
+  print_manual
+  echo "UPDATED $name $UP_OLD $UP_TARGET"
+}
+
+# --- remove ----------------------------------------------------------------------------
+
+cmd_remove() {
+  parse_name_args "$@"
+  [ -z "$ARG_REF$ARG_COMMIT" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
+  local name="$ARG_NAME" n uninstall
+  [ -d "$PLUGINS/$name" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
+  echo "PLUGIN $name $(state_value "$name" version | sed 's/^$/-/') $(state_value "$name" commit | sed 's/^$/-/')"
+  for n in $(state_value "$name" skills); do echo "SKILL $n"; done
+  for n in $(state_value "$name" agents); do echo "AGENT $n"; done
+  uninstall="$(state_value "$name" uninstall)"
+  if [ -n "$uninstall" ]; then echo "UNINSTALL $uninstall"; fi
+  fail "$EXIT_CONFIRM" "CONFIRM_REMOVE $name"
+}
+
+apply_remove() {
+  parse_name_args "$@"
+  [ -z "$ARG_REF$ARG_COMMIT" ] || die "apply remove takes only --force and a plugin name"
+  local name="$ARG_NAME" dest="$PLUGINS/$ARG_NAME" why uninstall
   [ -d "$dest" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
-  why="$(dirty_reason "$dest")"
-  if [ -n "$why" ] && [ "$force" -eq 0 ]; then fail "$EXIT_DIRTY" "DIRTY $dest $why"; fi
-  # Read the manifest leniently: a broken one must not keep the plugin from being removed.
-  conf="$dest/$MANIFEST"
-  uninstall="$(conf_value "$conf" uninstall | awk 'NR == 1')"
-
-  if [ "$yes" -eq 0 ]; then
-    echo "PLUGIN $name $(conf_value "$conf" version | awk 'NR == 1') $(git -C "$dest" rev-parse HEAD 2>/dev/null || echo unknown)"
-    for n in $(conf_value "$conf" skills); do echo "SKILL $n"; done
-    for n in $(conf_value "$conf" agents); do echo "AGENT $n"; done
-    if [ -n "$uninstall" ]; then echo "UNINSTALL $uninstall"; fi
-    fail "$EXIT_CONFIRM" "CONFIRM_REMOVE $name"
-  fi
-
+  why="$(dirty_reason "$dest" "$(state_value "$name" commit)")"
+  if [ -n "$why" ] && [ "$ARG_FORCE" -eq 0 ]; then fail "$EXIT_DIRTY" "DIRTY $dest $why"; fi
+  # From the state, not the clone: a manifest changed since apply must not choose what runs here.
+  uninstall="$(state_value "$name" uninstall)"
   if [ -n "$uninstall" ]; then
-    (cd "$dest" && bash -c "$uninstall") >&2 || echo "warning: uninstall failed, removing anyway: $uninstall" >&2
+    run_cmd "$dest" "$uninstall" || echo "warning: uninstall failed, removing anyway: $uninstall" >&2
   fi
   unlink_plugin "$name"
   rm -rf "$dest"
-  rm -f "$PLUGINS/.$name.install-failed"
+  rm -f "$(state_file "$name")"
   refresh_providers
   echo "REMOVED $name"
 }
+
+# --- list, check, sync -------------------------------------------------------------------
 
 # count_linked <name> <kind> <list>: "<linked>/<declared>".
 count_linked() {
@@ -486,25 +618,25 @@ count_linked() {
   echo "$linked/$total"
 }
 
+or_dash() { if [ -n "$1" ]; then printf '%s\n' "$1"; else echo "-"; fi; }
+
 cmd_list() {
   [ $# -eq 0 ] || die "list takes no arguments"
-  local dir name conf skills agents s a state commit any=0
+  local dir name s a state commit any=0
   for dir in "$PLUGINS"/*/; do
     [ -d "$dir" ] || continue
     name="$(basename "$dir")"
-    conf="$dir$MANIFEST"
     any=1
-    skills="$(conf_value "$conf" skills)"
-    agents="$(conf_value "$conf" agents)"
-    s="$(count_linked "$name" skills "$skills")"
-    a="$(count_linked "$name" agents "$agents")"
-    if [ -e "$PLUGINS/.$name.install-failed" ]; then state=INSTALL_FAILED
-    elif [ -n "$(dirty_reason "$dir")" ]; then state=DIRTY
+    commit="$(state_value "$name" commit)"
+    s="$(count_linked "$name" skills "$(state_value "$name" skills)")"
+    a="$(count_linked "$name" agents "$(state_value "$name" agents)")"
+    if [ ! -f "$(state_file "$name")" ]; then state=UNMANAGED
+    elif [ "$(state_value "$name" status)" = install-failed ]; then state=INSTALL_FAILED
+    elif [ -n "$(dirty_reason "$dir" "$commit")" ]; then state=MODIFIED
     elif [ "${s%/*}" != "${s#*/}" ] || [ "${a%/*}" != "${a#*/}" ]; then state=BROKEN_LINK
     else state=OK
     fi
-    commit="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    echo "INSTALLED $name $(conf_value "$conf" version) $commit $state $s $a"
+    echo "INSTALLED $name $(or_dash "$(state_value "$name" version)") $(or_dash "$(printf '%s' "$commit" | cut -c1-7)") $(or_dash "$(state_value "$name" ref)") $state $s $a"
   done
   if [ "$any" -eq 0 ]; then echo "NONE"; fi
 }
@@ -517,29 +649,39 @@ cmd_check() {
   echo "VALID $M_NAME $M_VERSION"
 }
 
-# Restore the links of every plugin in plugins/ (setup.sh runs it). A path taken by something else is
-# reported and left alone.
+# Restore the links of every installed plugin, from its state (setup.sh runs it). A path taken by
+# something else, a dangling link included, is reported and left alone.
 cmd_sync() {
   [ $# -eq 0 ] || die "sync takes no arguments"
-  local dir name conf n p
+  local dir name n p
   for dir in "$PLUGINS"/*/; do
     [ -d "$dir" ] || continue
     name="$(basename "$dir")"
-    conf="$dir$MANIFEST"
-    [ -f "$conf" ] || { echo "warning: $name has no $MANIFEST, skipped" >&2; continue; }
+    [ -f "$(state_file "$name")" ] || { echo "warning: $name was not installed with plugin-manage, skipped" >&2; continue; }
     mkdir -p "$ROOT/skills" "$ROOT/agents"
-    for n in $(conf_value "$conf" skills); do
+    for n in $(state_value "$name" skills); do
       p="$ROOT/skills/$n"
-      if [ -e "$p" ] && ! belongs_to "$p" "$name"; then echo "warning: skills/$n exists, not linked" >&2; continue; fi
+      if taken "$p" && ! belongs_to "$p" "$name"; then echo "warning: skills/$n exists, not linked" >&2; continue; fi
       relink "../plugins/$name/skills/$n" "$p"
     done
-    for n in $(conf_value "$conf" agents); do
+    for n in $(state_value "$name" agents); do
       p="$ROOT/agents/$n.md"
-      if [ -e "$p" ] && ! belongs_to "$p" "$name"; then echo "warning: agents/$n.md exists, not linked" >&2; continue; fi
+      if taken "$p" && ! belongs_to "$p" "$name"; then echo "warning: agents/$n.md exists, not linked" >&2; continue; fi
       relink "../plugins/$name/agents/$n.md" "$p"
     done
     echo "SYNCED $name"
   done
+}
+
+cmd_apply() {
+  local what="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$what" in
+    add)    apply_add "$@" ;;
+    update) apply_update "$@" ;;
+    remove) apply_remove "$@" ;;
+    *)      die "apply needs add, update or remove" ;;
+  esac
 }
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
@@ -554,17 +696,18 @@ main() {
   command -v git >/dev/null 2>&1 || die "git not found"
   ROOT="$(resolve_root)"
   PLUGINS="$ROOT/plugins"
-  export ARNESS_ROOT="$ROOT" GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL="https:http:ssh:file"
+  export ARNESS_ROOT="$ROOT" GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL="https:ssh:file"
   # shellcheck source=SCRIPTDIR/../../../scripts/lib.sh
   . "$ROOT/scripts/lib.sh"
   case "$cmd" in
     add)    cmd_add "$@" ;;
     update) cmd_update "$@" ;;
     remove) cmd_remove "$@" ;;
+    apply)  cmd_apply "$@" ;;
     list)   cmd_list "$@" ;;
     check)  cmd_check "$@" ;;
     sync)   cmd_sync "$@" ;;
-    *)      die "unknown command: $cmd (add, update, remove, list, check, sync)" ;;
+    *)      die "unknown command: $cmd (add, update, remove, apply, list, check, sync)" ;;
   esac
 }
 

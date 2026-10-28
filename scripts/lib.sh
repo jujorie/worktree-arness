@@ -71,21 +71,28 @@ conf_value() {
   K="$2" awk 'index($0, ENVIRON["K"] "=") == 1 { print substr($0, length(ENVIRON["K"]) + 2) }' "$1"
 }
 
-# plugin_allow_claude: Claude Code rules of the plugins in plugins/ (see plugins/README.md), one per
-# line: Skill(<s>) for each of their skills, then their allow.claude rules.
+# plugin_allow_claude: Claude Code rules of the installed plugins, one per line. Read only from
+# plugins/.<name>.state, which plugin-manage writes after validating the manifest, never from a clone's
+# arness-plugin.conf (a `git pull` there must not grant anything). A rule that could break out of its
+# JSON string (quote, backslash, control character) is dropped with a warning all the same.
 plugin_allow_claude() {
-  local conf s
-  for conf in "$ARNESS_ROOT"/plugins/*/arness-plugin.conf; do
-    [ -f "$conf" ] || continue
-    for s in $(conf_value "$conf" skills); do printf 'Skill(%s)\n' "$s"; done
-    conf_value "$conf" allow.claude
+  local state rule
+  for state in "$ARNESS_ROOT"/plugins/.*.state; do
+    [ -f "$state" ] || continue
+    conf_value "$state" allow.claude | while IFS= read -r rule; do
+      case "$rule" in
+        *'"'*|*\\*|*[[:cntrl:]]*) warn "unsafe rule in ${state##*/} skipped: $rule" ;;
+        *) printf '%s\n' "$rule" ;;
+      esac
+    done
   done
 }
 
 # render <src> <dest>: write src (relative to ARNESS_ROOT) to dest, replacing
 # {{$ARNESS_ROOT}} with the absolute repo path, and a line holding {{$PLUGIN_ALLOW}}
 # with one "<rule>", line per plugin rule at its indentation (no line when there are
-# none). Regenerated on every run; an existing different dest is kept once as <dest>.bak.
+# none). Regenerated on every run; when the content changes, the previous dest is saved
+# as <dest>.bak, replacing any older .bak (each plugin add, update or remove does it).
 render() {
   local src="$ARNESS_ROOT/$1" dest="$ARNESS_ROOT/$2" tmp esc rules
   esc=$(printf '%s' "$ARNESS_ROOT" | sed -e 's/[\\&|]/\\&/g')

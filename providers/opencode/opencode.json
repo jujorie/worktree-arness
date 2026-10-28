@@ -6,7 +6,8 @@
   "permission": {
     "bash": {
       "skills/*/scripts/*.sh": "allow",
-      "skills/*/scripts/*.sh *": "allow"
+      "skills/*/scripts/*.sh *": "allow",
+      "skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"
     },
     "skill": {
       "repo-clone": "allow",
