@@ -23,7 +23,7 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 
 | Output | Exit | What to do |
 |---|---|---|
-| Plan lines (`PLUGIN`, `SOURCE`, `DESCRIPTION`, `REQUIRES`, `SKILL`, `AGENT`, `ALLOW`, `NEW_ALLOW`, `OPENCODE_AUTO_ALLOW`, `INSTALL`, `UNINSTALL`), then `CONFIRM_ADD <name> <commit>` / `CONFIRM_UPDATE <name> <from> <to> <ref>` / `CONFIRM_REMOVE <name>` | 20 | Nothing was written. Show the whole plan: source and commit, description, requirements, skills, agents, every `ALLOW` rule word for word (`NEW_ALLOW` = rules the installed version did not have), the scripts OpenCode would run without asking (`OPENCODE_AUTO_ALLOW`), and the `INSTALL`/`UNINSTALL` commands, which run code from the plugin. Ask for confirmation. On an explicit yes, go to step 3. |
+| Plan lines (`PLUGIN`, `SOURCE`, `DESCRIPTION`, `REQUIRES`, `PROVIDES`, `SKILL`, `AGENT`, `ALLOW`, `NEW_ALLOW`, `OPENCODE_AUTO_ALLOW`, `INSTALL`, `UNINSTALL`), then `CONFIRM_ADD <name> <commit>` / `CONFIRM_UPDATE <name> <from> <to> <ref>` / `CONFIRM_REMOVE <name>` | 20 | Nothing was written. Show the whole plan: source and commit, description, requirements, the commands the plugin installs (`PROVIDES`), skills, agents, every `ALLOW` rule word for word (`NEW_ALLOW` = rules the installed version did not have), the scripts OpenCode would run without asking (`OPENCODE_AUTO_ALLOW`), and the `INSTALL`/`UNINSTALL` commands, which run code from the plugin. With `OPENCODE_UNGATED`, also tell the user that their `opencode.json` lets OpenCode run `apply` without asking, and that the `"ask"` rule from `providers/opencode/opencode.json` should be added to it (`plugins/README.md`). Ask for confirmation. On an explicit yes, go to step 3. |
 | `UP_TO_DATE <name> <commit> <ref>` | 0 | Report it. |
 | `INSTALLED ...` lines / `NONE` | 0 | Show them as a table: name, version, commit, ref, state, skills and agents linked/declared. `BROKEN_LINK`: offer `./setup.sh --provider <p>` (it restores plugin links). `MODIFIED`: the clone was changed outside this skill (edits, a `git pull`); nothing from it is trusted until it is updated or removed. `INSTALL_FAILED`: offer update or remove. `UNMANAGED`: a folder this skill did not install; offer to remove it. |
 | `VALID <name> <version>` | 0 | Report it. |
@@ -36,7 +36,7 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 | error on stderr | 2 | Invalid usage, URL, ref or name. Fix the input or ask the user. |
 | error on stderr | 3 | Clone or fetch failed (network, auth, wrong URL). Show the git error. |
 
-3. Run the confirmed change, with the commit from the plan, so what runs is what was shown:
+3. Run the confirmed change, with the full 40-character commit from the plan, so what runs is what was shown:
    - `... apply add --commit <commit> [--ref <same ref>] <url>`
    - `... apply update --commit <to> --ref <ref> <name>` (the `<ref>` of `CONFIRM_UPDATE`)
    - `... apply remove <name>`

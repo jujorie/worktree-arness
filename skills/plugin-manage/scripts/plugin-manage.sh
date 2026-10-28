@@ -21,12 +21,14 @@
 # Stdout (machine readable), first word is the status:
 #   PLUGIN <name> <version> <commit>      plan header
 #   SOURCE <url|-> <ref> <branch|tag|commit>
-#   DESCRIPTION <text> | REQUIRES <commands>
+#   DESCRIPTION <text> | REQUIRES <commands> | PROVIDES <commands>
 #   SKILL <name> | AGENT <name>           what the plugin links
 #   ALLOW <provider> <rule>               rule rendered (claude) or to add by hand (opencode)
 #   NEW_ALLOW <provider> <rule>           update: rule the installed version did not have
 #   OPENCODE_AUTO_ALLOW <path>            a plugin skill script OpenCode runs without asking
 #                                         (its skills/*/scripts/*.sh rule)
+#   OPENCODE_UNGATED <file>               that opencode.json lets OpenCode run `apply` without asking:
+#                                         it lacks the "ask" rule of providers/opencode/opencode.json
 #   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder by apply
 #   CONFIRM_ADD <name> <commit>           plan printed; nothing written (exit 20)
 #   CONFIRM_UPDATE <name> <from> <to> <ref>   plan printed; nothing written (exit 20)
@@ -65,12 +67,18 @@ CONTRACT=1
 MANIFEST=arness-plugin.conf
 SLUG_RE='^[a-z0-9]+(-[a-z0-9]+)*$'
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
-# Allowed rule shapes: one command, optional literal arguments, optional trailing " *".
+# Allowed rule shapes: one command, optional literal arguments, optional trailing " *" (only for a
+# command the plugin provides itself).
 CLAUDE_RULE_RE='^Bash\(([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?\)$'
 OPENCODE_RULE_RE='^([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?$'
-# Commands that run arbitrary code from their arguments: a rule for them would grant everything.
-RUNNERS=" bash sh zsh dash ksh fish csh tcsh env sudo su doas xargs eval exec command nohup time timeout"
-RUNNERS="$RUNNERS python python3 node ruby perl php lua deno bun npx pnpx uvx pipx osascript find awk sed git make "
+# Commands that run arbitrary code from their arguments: no rule may name them, even with literal
+# arguments. Versioned names (python3.12, node20, gawk) are caught by RUNNER_RE.
+RUNNERS=" bash sh zsh dash ksh fish csh tcsh pwsh powershell env sudo su doas xargs eval exec command nohup"
+RUNNERS="$RUNNERS time timeout watch nice osascript open find awk sed git make cmake ssh scp rsync tar curl"
+RUNNERS="$RUNNERS wget docker podman kubectl gh npx pnpx uvx pipx uv npm pnpm yarn pip cargo go bun deno "
+RUNNER_RE='^(python|pypy|node|nodejs|ruby|perl|php|lua|luajit|g?awk|mawk|nawk|gsed|pip)[0-9.]*$'
+# The rule OpenCode needs so that its skills/*/scripts/*.sh allow does not cover apply.
+OPENCODE_APPLY_RULE='"skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"'
 
 ROOT="" PLUGINS=""
 TMP_DIR=""   # global: the EXIT trap runs after main() returns
@@ -107,6 +115,15 @@ validate_ref() {
   esac
 }
 
+# apply takes only the full sha the plan printed: a short prefix could be matched by another commit
+# the plugin's author crafts after the confirmation.
+validate_full_commit() {
+  case "$1" in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#1}" -eq 40 ]
+}
+
 validate_commit() {
   case "$1" in
     ""|*[!0-9a-f]*) return 1 ;;
@@ -121,7 +138,7 @@ is_slug() { [[ $1 =~ $SLUG_RE ]]; }
 # parse_manifest <file>: fill the M_* globals, or print BAD_MANIFEST and exit.
 parse_manifest() {
   local file="$1" line key value n=0 seen=" "
-  M_NAME="" M_VERSION="" M_PREFIX="" M_ARNESS="" M_DESC="" M_SKILLS="" M_AGENTS="" M_REQUIRES=""
+  M_NAME="" M_VERSION="" M_PREFIX="" M_ARNESS="" M_DESC="" M_SKILLS="" M_AGENTS="" M_REQUIRES="" M_PROVIDES=""
   M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE=""
   [ -f "$file" ] || fail "$EXIT_INVALID" "BAD_MANIFEST missing $MANIFEST"
   while IFS= read -r line || [ -n "$line" ]; do
@@ -137,7 +154,7 @@ parse_manifest() {
     case "$key" in
       allow.claude)   M_ALLOW_CLAUDE="${M_ALLOW_CLAUDE}${value}"$'\n'; continue ;;
       allow.opencode) M_ALLOW_OPENCODE="${M_ALLOW_OPENCODE}${value}"$'\n'; continue ;;
-      name|version|prefix|arness|description|skills|agents|requires|install|uninstall) ;;
+      name|version|prefix|arness|description|skills|agents|requires|provides|install|uninstall) ;;
       *) fail "$EXIT_INVALID" "BAD_MANIFEST line $n: unknown key $key" ;;
     esac
     case "$seen" in *" $key "*) fail "$EXIT_INVALID" "BAD_MANIFEST line $n: duplicate key $key" ;; esac
@@ -151,16 +168,23 @@ parse_manifest() {
       skills)      M_SKILLS="$value" ;;
       agents)      M_AGENTS="$value" ;;
       requires)    M_REQUIRES="$value" ;;
+      provides)    M_PROVIDES="$value" ;;
       install)     M_INSTALL="$value" ;;
       uninstall)   M_UNINSTALL="$value" ;;
     esac
   done < "$file"
 }
 
-# check_rule <provider> <rule>: an allowlist, not a denylist. A rule is one command the plugin
-# requires, not a command runner, with optional literal arguments and an optional trailing " *".
+is_runner() {
+  case "$RUNNERS" in *" $1 "*) return 0 ;; esac
+  [[ $1 =~ $RUNNER_RE ]]
+}
+
+# check_rule <provider> <rule>: an allowlist. A rule names one command that is not a command runner:
+#   - a command the plugin provides (installed by its install): any arguments, " *" allowed;
+#   - a command it requires from the system: literal arguments only, no " *".
 check_rule() {
-  local provider="$1" rule="$2" re cmd
+  local provider="$1" rule="$2" re cmd star
   if [ "$provider" = claude ]; then re="$CLAUDE_RULE_RE"; else re="$OPENCODE_RULE_RE"; fi
   if ! [[ $rule =~ $re ]]; then
     if [ "$provider" = claude ]; then
@@ -169,8 +193,13 @@ check_rule() {
     fail "$EXIT_INVALID" "BAD_RULE opencode $rule: not <command> [args] [*]"
   fi
   cmd="${BASH_REMATCH[1]}"
-  case "$RUNNERS" in *" $cmd "*) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd runs arbitrary code" ;; esac
-  case " $M_REQUIRES " in *" $cmd "*) ;; *) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd is not in requires" ;; esac
+  star="${BASH_REMATCH[4]}"
+  if is_runner "$cmd"; then fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd runs arbitrary code"; fi
+  case " $M_PROVIDES " in *" $cmd "*) return 0 ;; esac
+  case " $M_REQUIRES " in
+    *" $cmd "*) [ -z "$star" ] || fail "$EXIT_INVALID" "BAD_RULE $provider $rule: * only for a command in provides" ;;
+    *) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd is not in requires or provides" ;;
+  esac
 }
 
 # check_names <kind> <list> <dir>: every name is a slug with the plugin prefix, exists in the plugin and
@@ -203,7 +232,11 @@ validate_plugin() {
     || fail "$EXIT_INVALID" "BAD_MANIFEST prefix: not a slug ending in -: $M_PREFIX"
   [ "${#M_DESC}" -le 200 ] || fail "$EXIT_INVALID" "BAD_MANIFEST description: longer than 200 characters"
   case "$M_DESC$M_INSTALL$M_UNINSTALL" in *[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_MANIFEST control character in a value" ;; esac
-  case "$M_REQUIRES" in *[!A-Za-z0-9._\ -]*) fail "$EXIT_INVALID" "BAD_MANIFEST requires: invalid command name" ;; esac
+  case "$M_REQUIRES$M_PROVIDES" in *[!A-Za-z0-9._\ -]*) fail "$EXIT_INVALID" "BAD_MANIFEST requires, provides: invalid command name" ;; esac
+  local c
+  for c in $M_PROVIDES; do
+    if is_runner "$c"; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c runs arbitrary code"; fi
+  done
   check_names skills "$M_SKILLS" "$dir"
   check_names agents "$M_AGENTS" "$dir"
   while IFS= read -r rule; do
@@ -219,6 +252,22 @@ check_requirements() {
   for c in $M_REQUIRES; do
     command -v "$c" >/dev/null 2>&1 || fail "$EXIT_REQUIREMENT" "MISSING_REQUIREMENT $c"
   done
+}
+
+# check_provides_free: before a first install, a command the plugin says it provides must not exist
+# yet, or its " *" rule would grant a system command (provides=rm).
+check_provides_free() {
+  local c
+  for c in $M_PROVIDES; do
+    if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi
+  done
+}
+
+# Warn in the plan when an existing opencode.json (copied once, never updated) lacks the rule that
+# makes OpenCode ask before apply.
+check_opencode_gate() {
+  local f="$ROOT/opencode.json"
+  if [ -f "$f" ] && ! grep -qF "$OPENCODE_APPLY_RULE" "$f"; then echo "OPENCODE_UNGATED opencode.json"; fi
 }
 
 # Claude Code rules arness grants for the plugin: Skill(<s>) for each skill, then its allow.claude rules.
@@ -242,6 +291,7 @@ print_plan() {
   echo "SOURCE ${2:--} $3 $4"
   echo "DESCRIPTION $M_DESC"
   if [ -n "$M_REQUIRES" ]; then echo "REQUIRES $M_REQUIRES"; fi
+  if [ -n "$M_PROVIDES" ]; then echo "PROVIDES $M_PROVIDES"; fi
   for n in $M_SKILLS; do echo "SKILL $n"; done
   for n in $M_AGENTS; do echo "AGENT $n"; done
   print_rules ALLOW claude "$(claude_rules)"
@@ -253,6 +303,7 @@ print_plan() {
   done
   if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
   if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+  check_opencode_gate
 }
 
 print_manual() {
@@ -272,7 +323,7 @@ write_state() {
   tmp="$file.tmp"
   {
     printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\n' "$2" "$3" "$4" "$5"
-    printf 'version=%s\nskills=%s\nagents=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_UNINSTALL"
+    printf 'version=%s\nskills=%s\nagents=%s\nprovides=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_PROVIDES" "$M_UNINSTALL"
     claude_rules | awk 'NF { print "allow.claude=" $0 }'
     printf '%s' "$M_ALLOW_OPENCODE" | awk 'NF { print "allow.opencode=" $0 }'
   } > "$tmp"
@@ -352,11 +403,18 @@ run_cmd() {
 }
 
 run_install() {
-  local name="$1" dir="$2"
+  local name="$1" dir="$2" c
   if [ -n "$M_INSTALL" ] && ! run_cmd "$dir" "$M_INSTALL"; then
     set_status "$name" install-failed
     fail "$EXIT_INSTALL" "INSTALL_FAILED $name"
   fi
+  for c in $M_PROVIDES; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      echo "error: install did not provide the command $c" >&2
+      set_status "$name" install-failed
+      fail "$EXIT_INSTALL" "INSTALL_FAILED $name"
+    fi
+  done
 }
 
 # --- git -----------------------------------------------------------------------
@@ -371,11 +429,6 @@ dirty_reason() {
   if [ -n "$applied" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" != "$applied" ]; then
     echo "moved"
   fi
-}
-
-check_commit() {
-  local expect="$1" actual="$2"
-  case "$actual" in "$expect"*) ;; *) fail "$EXIT_MISMATCH" "MISMATCH $expect $actual" ;; esac
 }
 
 new_tmp() {
@@ -400,8 +453,11 @@ resolve_ref() {
   die "ref not found: $ref"
 }
 
-# newest_tag <dir>: the highest version tag (git's version sort), empty when there is none.
-newest_tag() { git -C "$1" tag --list --sort=-v:refname | awk 'NR == 1'; }
+# newest_tag <dir>: the highest stable version tag, [v]MAJOR.MINOR.PATCH (git's version sort), empty
+# when there is none. Pre-releases and other tags (latest, nightly) only through an explicit --ref.
+newest_tag() {
+  git -C "$1" tag --list --sort=-v:refname | awk '/^v?[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }'
+}
 
 # export_tree <dir> <commit> <out>: the commit's files as checkout writes them (a private index;
 # unlike git archive, export-ignore and export-subst do not apply), without touching the clone.
@@ -429,6 +485,7 @@ prepare_add() {
   validate_plugin "$ADD_DIR"
   check_requirements
   if [ -e "$PLUGINS/$M_NAME" ] || [ -L "$PLUGINS/$M_NAME" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
+  check_provides_free
   check_conflicts "$M_NAME"
 }
 
@@ -458,9 +515,9 @@ cmd_add() {
 
 apply_add() {
   parse_add_args "$@"
-  [ -n "$ARG_COMMIT" ] || die "apply add needs --commit <sha> from the plan (CONFIRM_ADD)"
+  validate_full_commit "$ARG_COMMIT" || die "apply add needs --commit <full 40-character sha> from the plan (CONFIRM_ADD)"
   prepare_add "$ARG_URL" "$ARG_REF"
-  check_commit "$ARG_COMMIT" "$ADD_COMMIT"
+  [ "$ARG_COMMIT" = "$ADD_COMMIT" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $ADD_COMMIT"
   local dest="$PLUGINS/$M_NAME"
   mv "$ADD_DIR" "$dest"
   link_plugin "$M_NAME" "$M_SKILLS" "$M_AGENTS"
@@ -512,6 +569,15 @@ prepare_update() {
   validate_plugin "$TMP_DIR/tree"
   [ "$M_NAME" = "$name" ] || fail "$EXIT_INVALID" "BAD_MANIFEST name changed from $name to $M_NAME"
   check_requirements
+  # Commands provided since the installed version must not exist yet, like on a first install.
+  local c old_provides
+  old_provides="$(state_value "$name" provides)"
+  for c in $M_PROVIDES; do
+    case " $old_provides " in
+      *" $c "*) ;;
+      *) if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi ;;
+    esac
+  done
   check_conflicts "$name"
 }
 
@@ -554,12 +620,12 @@ cmd_update() {
 # No fetch: apply moves to what the plan fetched and showed, or reports MISMATCH.
 apply_update() {
   parse_name_args "$@"
-  [ -n "$ARG_COMMIT" ] || die "apply update needs --commit <sha> from the plan (CONFIRM_UPDATE)"
+  validate_full_commit "$ARG_COMMIT" || die "apply update needs --commit <full 40-character sha> from the plan (CONFIRM_UPDATE)"
   [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
   local name="$ARG_NAME"
   prepare_update "$name" "$ARG_REF" 0
   if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
-  check_commit "$ARG_COMMIT" "$UP_TARGET"
+  [ "$ARG_COMMIT" = "$UP_TARGET" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $UP_TARGET"
   # Detached: no local branch is created or reset, so nothing local can be lost.
   git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
   unlink_plugin "$name"

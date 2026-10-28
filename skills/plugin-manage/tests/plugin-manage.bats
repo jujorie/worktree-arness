@@ -9,12 +9,13 @@ SKILL_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 
 git_q() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
 
-# write_conf [extra lines...]: the demo manifest, with extra lines appended.
+# write_conf [extra lines...]: the demo manifest, with extra lines appended. Its install provides the
+# demo-tool command (a stub in $BATS_TEST_TMPDIR/bin, which is on PATH); its uninstall removes it.
 write_conf() {
   {
     printf '%s\n' 'name=demo' 'version=0.1.0' 'prefix=demo-' 'arness=1' 'description=Demo plugin for tests'
-    printf '%s\n' 'skills=demo-hello' 'agents=demo-helper' 'requires=demo-tool' 'install=touch installed.flag'
-    printf '%s\n' "uninstall=touch $BATS_TEST_TMPDIR/uninstalled.flag"
+    printf '%s\n' 'skills=demo-hello' 'agents=demo-helper' 'requires=git' 'provides=demo-tool'
+    printf '%s\n' "install=$INSTALL_CMD" "uninstall=$UNINSTALL_CMD"
     printf '%s\n' 'allow.claude=Bash(demo-tool *)' 'allow.opencode=demo-tool *'
     if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi
   } > "$ORIGIN/arness-plugin.conf"
@@ -35,9 +36,10 @@ setup() {
   cp -R "$SKILL_DIR" "$SANDBOX/skills/"
   SCRIPT="$SANDBOX/skills/plugin-manage/scripts/plugin-manage.sh"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
-  printf '#!/bin/sh\n' > "$BATS_TEST_TMPDIR/bin/demo-tool"
-  chmod +x "$BATS_TEST_TMPDIR/bin/demo-tool"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  TOOL="$BATS_TEST_TMPDIR/bin/demo-tool"
+  INSTALL_CMD="touch installed.flag && cp skills/demo-hello/scripts/hello.sh $TOOL && chmod +x $TOOL"
+  UNINSTALL_CMD="touch $BATS_TEST_TMPDIR/uninstalled.flag && rm -f $TOOL"
   ORIGIN="$BATS_TEST_TMPDIR/origin/demo-plugin"
   mkdir -p "$ORIGIN/skills/demo-hello/scripts" "$ORIGIN/agents"
   printf -- '---\nname: demo-hello\ndescription: Say hello.\n---\n' > "$ORIGIN/skills/demo-hello/SKILL.md"
@@ -60,10 +62,10 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   [ "$status" -eq 20 ]
   [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head)" ]
   for l in "PLUGIN demo 0.1.0 $(origin_head)" "SOURCE $URL main branch" "DESCRIPTION Demo plugin for tests" \
-           "REQUIRES demo-tool" "SKILL demo-hello" "AGENT demo-helper" "ALLOW claude Skill(demo-hello)" \
+           "REQUIRES git" "PROVIDES demo-tool" "SKILL demo-hello" "AGENT demo-helper" "ALLOW claude Skill(demo-hello)" \
            "ALLOW claude Bash(demo-tool *)" "ALLOW opencode demo-tool *" \
-           "OPENCODE_AUTO_ALLOW skills/demo-hello/scripts/hello.sh" "INSTALL touch installed.flag" \
-           "UNINSTALL touch $BATS_TEST_TMPDIR/uninstalled.flag"; do
+           "OPENCODE_AUTO_ALLOW skills/demo-hello/scripts/hello.sh" "INSTALL $INSTALL_CMD" \
+           "UNINSTALL $UNINSTALL_CMD"; do
     printf '%s\n' "$output" | grep -qxF -- "$l" || { echo "missing: $l"; false; }
   done
   [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -L "$SANDBOX/skills/demo-hello" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ]
@@ -80,11 +82,48 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 
 # --- apply add -------------------------------------------------------------------
 
-@test "apply add refuses to run without --commit from a plan" {
+@test "apply add refuses to run without the full --commit from a plan" {
   run "$SCRIPT" apply add "$URL"
   [ "$status" -eq 2 ]
   [[ "$output" == *"needs --commit"* ]]
+  run "$SCRIPT" apply add --commit "$(origin_head | cut -c1-7)" "$URL"
+  [ "$status" -eq 2 ]
   [ ! -e "$SANDBOX/plugins/demo" ]
+}
+
+@test "the plan warns when an existing opencode.json does not gate apply" {
+  echo '{"permission":{"bash":{"skills/*/scripts/*.sh *":"allow"}}}' > "$SANDBOX/opencode.json"
+  run "$SCRIPT" add "$URL"
+  [[ "$output" == *"OPENCODE_UNGATED opencode.json"* ]]
+  cp "$SANDBOX/providers/opencode/opencode.json" "$SANDBOX/opencode.json"
+  run "$SCRIPT" add "$URL"
+  [[ "$output" != *"OPENCODE_UNGATED"* ]]
+}
+
+@test "opencode setup warns about an existing opencode.json that does not gate apply" {
+  echo '{"model":"x"}' > "$SANDBOX/opencode.json"
+  run bash "$SANDBOX/setup.sh" --provider opencode
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"lets OpenCode run plugin-manage.sh apply without asking"* ]]
+  rm "$SANDBOX/opencode.json"
+  run bash "$SANDBOX/setup.sh" --provider opencode
+  [[ "$output" != *"without asking"* ]]
+}
+
+@test "a command the plugin provides must not exist before it is installed" {
+  printf '#!/bin/sh\n' > "$TOOL"; chmod +x "$TOOL"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "an install that does not provide its commands is INSTALL_FAILED" {
+  edit_conf 's/^install=.*/install=touch installed.flag/'
+  commit_origin "no tool"
+  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  [ "$status" -eq 13 ]
+  [ "$(last_line)" = "INSTALL_FAILED demo" ]
+  [[ "$output" == *"did not provide the command demo-tool"* ]]
 }
 
 @test "apply add clones, links, records the state and runs install" {
@@ -121,9 +160,10 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 }
 
 @test "apply add with a commit other than the plan's is a MISMATCH" {
-  run "$SCRIPT" apply add --commit 0000000 "$URL"
+  zeros=0000000000000000000000000000000000000000
+  run "$SCRIPT" apply add --commit "$zeros" "$URL"
   [ "$status" -eq 14 ]
-  [[ "$(last_line)" == "MISMATCH 0000000 "* ]]
+  [[ "$(last_line)" == "MISMATCH $zeros "* ]]
   [ ! -e "$SANDBOX/plugins/demo" ]
 }
 
@@ -157,7 +197,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 }
 
 @test "a missing requirement is MISSING_REQUIREMENT" {
-  edit_conf 's/^requires=.*/requires=demo-tool no-such-cmd-xyz/'
+  edit_conf 's/^requires=.*/requires=git no-such-cmd-xyz/'
   commit_origin "req"
   run "$SCRIPT" add "$URL"
   [ "$status" -eq 5 ]
@@ -176,7 +216,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 }
 
 @test "install runs without the script's git and arness settings" {
-  edit_conf 's/^install=.*/install=env > env.txt/'
+  edit_conf 's|^install=|install=env > env.txt \&\& |'
   commit_origin "env"
   add_demo
   ! grep -qE '^(ARNESS_ROOT|GIT_ALLOW_PROTOCOL|GIT_TERMINAL_PROMPT)=' "$SANDBOX/plugins/demo/env.txt"
@@ -211,11 +251,11 @@ check_with() {
 
 @test "check rejects unknown, repeated and malformed lines with their number" {
   check_with 'colour=blue'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 13: unknown key colour" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: unknown key colour" ]
   check_with 'name=other'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 13: duplicate key name" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: duplicate key name" ]
   check_with 'just words'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 13: not KEY=value" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: not KEY=value" ]
 }
 
 @test "check rejects a missing manifest and an unsupported contract" {
@@ -227,11 +267,18 @@ check_with() {
   [ "$status" -eq 4 ] && [ "$output" = "ARNESS_VERSION 2" ]
 }
 
-@test "check accepts only narrow rules for a required command" {
+@test "check accepts * for a provided command and literal arguments for a required one" {
   for rule in 'allow.claude=Bash(demo-tool)' 'allow.claude=Bash(demo-tool run *)' 'allow.opencode=demo-tool run --fast *'; do
     check_with "$rule"
     [ "$status" -eq 0 ] || { echo "$rule: $output"; false; }
   done
+  write_conf; edit_conf 's/^requires=.*/requires=git true/'
+  printf '%s\n' 'allow.claude=Bash(true --version)' >> "$ORIGIN/arness-plugin.conf"
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 0 ]
+  printf '%s\n' 'allow.claude=Bash(true *)' >> "$ORIGIN/arness-plugin.conf"
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(true *): * only for a command in provides" ]
 }
 
 @test "check rejects every rule outside the allowed shapes" {
@@ -245,17 +292,28 @@ check_with() {
   done
 }
 
-@test "check rejects command runners and commands not in requires" {
+@test "check rejects command runners, versioned ones included, even with literal arguments" {
   write_conf
-  edit_conf 's/^requires=.*/requires=demo-tool bash git/'
-  for rule in 'allow.claude=Bash(bash *)' 'allow.claude=Bash(git *)' 'allow.opencode=bash *'; do
+  edit_conf 's/^requires=.*/requires=git bash uv npm python3.12 gawk curl docker node20/'
+  for rule in 'allow.claude=Bash(bash x)' 'allow.claude=Bash(git status)' 'allow.claude=Bash(uv run x)' \
+              'allow.claude=Bash(npm exec x)' 'allow.claude=Bash(python3.12 x.py)' 'allow.claude=Bash(gawk x)' \
+              'allow.claude=Bash(curl x)' 'allow.claude=Bash(docker run x)' 'allow.claude=Bash(node20 x)' \
+              'allow.opencode=bash x'; do
     printf '%s\n' "$rule" >> "$ORIGIN/arness-plugin.conf"
     run "$SCRIPT" check "$ORIGIN"
-    [ "$status" -eq 4 ] && [[ "$output" == *"runs arbitrary code" ]]
+    [ "$status" -eq 4 ] && [[ "$output" == *"runs arbitrary code" ]] || { echo "accepted: $rule"; false; }
     edit_conf '$d'
   done
+  write_conf; edit_conf 's/^provides=.*/provides=python3/'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST provides: python3 runs arbitrary code" ]
+}
+
+@test "check rejects a rule for a command neither required nor provided" {
   check_with 'allow.opencode=rm *'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE opencode rm *: rm is not in requires" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE opencode rm *: rm is not in requires or provides" ]
+  check_with 'allow.claude=Bash(rm -rf x)'
+  [ "$status" -eq 4 ] && [[ "$output" == *"rm is not in requires or provides" ]]
 }
 
 @test "check rejects a skill or agent without the prefix, missing or misnamed" {
@@ -350,6 +408,7 @@ check_with() {
   edit_conf 's/^version=.*/version=0.9.0/'
   commit_origin "c9"
   git_q -C "$ORIGIN" tag v0.9.0
+  for t in v0.11.0-rc1 latest zzz; do git_q -C "$ORIGIN" tag "$t"; done
   target="$(git -C "$ORIGIN" rev-parse v0.10.0)"
   run "$SCRIPT" update demo
   [ "$status" -eq 20 ]
@@ -432,7 +491,7 @@ check_with() {
   run "$SCRIPT" remove demo
   [ "$status" -eq 20 ]
   [ "$(last_line)" = "CONFIRM_REMOVE demo" ]
-  [[ "$output" == *"UNINSTALL touch $BATS_TEST_TMPDIR/uninstalled.flag"* ]]
+  [[ "$output" == *"UNINSTALL $UNINSTALL_CMD"* ]]
   [ -d "$SANDBOX/plugins/demo" ]
   run "$SCRIPT" apply remove demo
   [ "$status" -eq 0 ]
