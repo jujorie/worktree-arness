@@ -11,7 +11,7 @@
 # only one there is used; with several, nothing runs and they are listed (CHOOSE_WORKTREE).
 # The script must be a key of "scripts" in the package.json at the root of the worktree (read with
 # `npm pkg get scripts`). It runs as `npm run <script> [-- <args>]`, cwd = the worktree, in its own
-# process group, so stop also ends its children (dev servers, watchers).
+# process group, so stop also ends its children (dev servers, watchers); in Git Bash, with taskkill /T.
 # Without node_modules it stops with CONFIRM_INSTALL; --install runs `npm ci` (with package-lock.json)
 # or `npm install` first. Logs and pids: <arness>/tmp/npm-run/<repo>/<name>/<script>.{log,pid}.
 # stop removes the pid and log of what it stops, and the install.log and folders left empty. A script
@@ -26,6 +26,7 @@
 #   RUNNING <repo>/<name> <script> <pid> <log>     ps: still running
 #   EXITED <repo>/<name> <script> <pid> <log>      ps: no longer running (its pid file is removed)
 #   STOPPED <repo>/<name> <script> <pid>           stop (its pid and log are removed)
+#   STOP_FAILED <repo>/<name> <script> <pid>       stop could not end its process tree; pid kept (exit 14)
 #   CLEANED <repo>/<name> <file>                   clean: a log or stale pid file removed
 #   NONE                                           ps / stop / clean: nothing to show, stop or remove
 #   CHOOSE_WORKTREE <repo>/<name>...               several worktrees, none given (exit 10)
@@ -41,11 +42,11 @@
 #   NO_NPM                                         npm not found (exit 3)
 # Exit codes: 0 ok, 2 invalid usage, 3 no npm, 4 no worktree, 5 no command, 6 package.json,
 # 7 unknown script, 8 script failed at start, 9 already running, 10 choose worktree,
-# 11 confirm install, 12 install failed.
+# 11 confirm install, 12 install failed, 14 stop failed.
 set -euo pipefail
 
 EXIT_USAGE=2 EXIT_NO_NPM=3 EXIT_NO_WORKTREE=4 EXIT_NO_COMMAND=5 EXIT_PACKAGE=6 EXIT_UNKNOWN_SCRIPT=7
-EXIT_FAILED=8 EXIT_RUNNING=9 EXIT_CHOOSE=10 EXIT_CONFIRM_INSTALL=11 EXIT_INSTALL=12
+EXIT_FAILED=8 EXIT_RUNNING=9 EXIT_CHOOSE=10 EXIT_CONFIRM_INSTALL=11 EXIT_INSTALL=12 EXIT_STOP_FAILED=14
 
 die() { echo "error: $*" >&2; exit "$EXIT_USAGE"; }
 
@@ -87,6 +88,10 @@ list_worktrees() {
     [ -e "$repo_dir/.git" ] || continue
     repo="$(basename "$repo_dir")"
     prefix="$ROOT/worktrees/$repo/"
+    # Git for Windows lists worktrees as C:/Users/..., while the shell gives /c/Users/...
+    if command -v cygpath >/dev/null 2>&1; then
+      prefix="$(cygpath -m "$prefix")" || { echo "warning: cygpath cannot convert $ROOT/worktrees/$repo/; $repo not listed" >&2; continue; }
+    fi
     while IFS= read -r line; do
       case "$line" in
         "worktree $prefix"?*)
@@ -148,8 +153,16 @@ print_scripts() {
 pid_alive() {
   case "$1" in ""|*[!0-9]*) return 1 ;; esac
   kill -0 "$1" 2>/dev/null || return 1
-  case "$(ps -p "$1" -o args= 2>/dev/null)" in *npm*) return 0 ;; esac
+  case "$(proc_args "$1")" in *npm*) return 0 ;; esac
   return 1
+}
+
+# proc_args <pid>: its command line. ps first (Linux, macOS: an npm leader that is a zombie still shows as
+# [npm] <defunct>, so stop still ends its group); /proc when ps cannot (the ps of Git Bash has no -o, slim
+# images have no ps).
+proc_args() {
+  if ps -p "$1" -o args= 2>/dev/null; then return 0; fi
+  if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' 2>/dev/null < "/proc/$1/cmdline"; fi
 }
 
 install_deps() {
@@ -297,9 +310,21 @@ forget() {
   prune_dirs "$dir"
 }
 
-# stop_pid <pid>: TERM to its process group, then KILL after 5 s.
+# stop_pid <pid>: TERM to its process group, then KILL after 5 s. Returns 1 when it cannot end the tree.
 stop_pid() {
-  local pid="$1"
+  local pid="$1" out rc=0
+  # Git Bash (Windows): end the Windows process tree first. When an MSYS shell stays as the parent of a
+  # native node (a script like `sh -c "node server.js; exit 0"`), TERM to the group does not reach node,
+  # and TERM first would leave taskkill without the root of the tree. Console processes have no clean
+  # shutdown here: taskkill refuses without /F. MSYS2_ARG_CONV_EXCL keeps /T /F as they are, also when
+  # the user exported MSYS_NO_PATHCONV. Exit 128: that process no longer exists.
+  if [ -r "/proc/$pid/winpid" ] && command -v taskkill >/dev/null 2>&1; then
+    out="$(MSYS2_ARG_CONV_EXCL='*' taskkill /T /F /PID "$(cat "/proc/$pid/winpid")" 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 128 ]; then
+      echo "warning: taskkill could not end the process tree of $pid: $out" >&2
+      return 1
+    fi
+  fi
   kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
   for _ in $(seq 50); do
     kill -0 "$pid" 2>/dev/null || return 0
@@ -326,20 +351,26 @@ cmd_stop() {
     [ -z "$only" ] || validate_script "$only" || die "invalid script: '$only'"
   fi
 
-  local slug script file pid any=0
+  local slug script file pid any=0 failed=0
   while IFS='	' read -r slug script file; do
     [ -n "$file" ] || continue
     [ -z "$want" ] || [ "$slug" = "$want" ] || continue
     [ -z "$only" ] || [ "$script" = "$only" ] || continue
     pid="$(cat "$file")"
     if pid_alive "$pid"; then
-      stop_pid "$pid"
-      echo "STOPPED $slug $script $pid"
       any=1
+      if ! stop_pid "$pid"; then
+        # Part of it may still run: keep its pid file, so stop can be retried.
+        echo "STOP_FAILED $slug $script $pid"
+        failed=1
+        continue
+      fi
+      echo "STOPPED $slug $script $pid"
     fi
     forget "$file"
   done < <(each_pid_file)
   [ "$any" -eq 1 ] || echo "NONE"
+  if [ "$failed" -eq 1 ]; then exit "$EXIT_STOP_FAILED"; fi
 }
 
 # cmd_clean [--worktree <slug>]: remove the logs and pid files of what no longer runs, and empty folders.
@@ -388,7 +419,7 @@ main() {
   local cmd="$1"
   shift
   case "$cmd" in
-    -h|--help) sed -n '2,44p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     run|scripts|ps|stop|clean) ;;
     *) die "unknown command: $cmd" ;;
   esac

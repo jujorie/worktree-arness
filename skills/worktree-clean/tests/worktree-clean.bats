@@ -2,6 +2,8 @@
 # Unit tests for skills/worktree-clean/scripts/worktree-clean.sh.
 # Each test runs against a throwaway ARNESS_ROOT with local repos in source/.
 
+load ../../../tests/helpers
+
 SKILL_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 SCRIPT="$SKILL_DIR/scripts/worktree-clean.sh"
 
@@ -30,6 +32,11 @@ merge_wt() { git_q -C "$SRC/$1" merge -q --no-ff -m merge "$2"; }
 
 # column <n> of the row whose name (col 2) is <name>
 col() { printf '%s\n' "$output" | awk -F'\t' -v n="$1" -v c="$2" '$2 == n { print $c }'; }
+
+# git_path <path>: <path> as git prints it: C:/... through cygpath -m in Git Bash, unchanged elsewhere.
+git_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
 
 # source/a is a clone of origin; worktree w is freshly made from origin/epic/X-1 (no commits of its own).
 mk_remote_wt_nocommit() {
@@ -63,7 +70,7 @@ EOF
   unset FAKE_GH_HEADS
 }
 
-teardown() { rm -rf "$TMP"; }
+teardown() { chmod -R u+w "$TMP" 2>/dev/null || true; rm -rf "$TMP"; }
 
 @test "NO_SOURCE when source/ has no repos" {
   run "$SCRIPT" list
@@ -203,6 +210,179 @@ teardown() { rm -rf "$TMP"; }
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 0 ]
   [ -d "$ARNESS_ROOT/worktrees/a/feat/y" ]
+}
+
+# fake_git_remove <mode>: wrap git so `worktree remove` leaves the dir like Git for Windows.
+#   left-behind: git does unregister the worktree, but a file stays in its dir ("Directory not empty")
+#   left-link: git unregisters the worktree and exits 0, but leaves node_modules/@s/pkg, a link to
+#              $TMP/outside (a junction in Git Bash), as Git for Windows does with npm's junctions
+#   still-listed: git does nothing, the worktree stays registered
+#   list-fails: like still-listed, and every later `worktree list` fails
+#   held: like left-behind, but the leftover cannot be deleted (no write permission on its folder)
+#   still-listed-big: like still-listed, and `worktree list` adds 5000 other worktrees (over 64 KB)
+fake_git_remove() {
+  local real_git
+  real_git="$(command -v git)"
+  cat > "$TMP/bin/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = list ] && [ -e "$TMP/remove-tried" ]; then echo "fatal: cannot list worktrees" >&2; exit 128; fi
+  if [ "\$a" = list ] && [ "$1" = still-listed-big ]; then
+    "$real_git" "\$@" || exit
+    for i in \$(seq 5000); do printf 'worktree /elsewhere/%s\nHEAD %040d\ndetached\n\n' "\$i" 0; done
+    exit 0
+  fi
+  [ "\$a" = remove ] || continue
+  p="\${!#}"
+  if [ "$1" = left-link ]; then
+    "$real_git" "\$@" >/dev/null 2>&1 || exit
+    mkdir -p "\$p/node_modules/@s"
+    if command -v cygpath >/dev/null 2>&1; then
+      cmd //c mklink //J "\$(cygpath -w "\$p/node_modules/@s/pkg")" "\$(cygpath -w "$TMP/outside")" >/dev/null
+    else
+      ln -s "$TMP/outside" "\$p/node_modules/@s/pkg"
+    fi
+    exit 0
+  fi
+  if [ "$1" = left-behind ] || [ "$1" = held ]; then "$real_git" "\$@" >/dev/null 2>&1; mkdir -p "\$p/node_modules/x"; echo y > "\$p/node_modules/x/f"; fi
+  if [ "$1" = held ]; then chmod a-w "\$p/node_modules/x"; fi
+  if [ "$1" = list-fails ]; then : > "$TMP/remove-tried"; fi
+  echo "error: failed to delete '\$p': Directory not empty" >&2
+  exit 1
+done
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$TMP/bin/git"
+}
+
+@test "remove finishes deleting a dir that git unregistered but left behind" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_git_remove left-behind
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"note: git left "*"/worktrees/a/feat/x behind"* ]]
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
+  [ -d "$ARNESS_ROOT/worktrees/a" ]
+  [ -z "$(git -C "$SRC/a" branch --list feat/x)" ]
+}
+
+@test "remove deletes what git leaves behind after a successful remove, never through a link" {
+  mk_repo a
+  mk_wt a feat/x
+  mkdir "$TMP/outside"
+  echo keep > "$TMP/outside/keep.txt"
+  fake_git_remove left-link
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"note: git left "*"/worktrees/a/feat/x behind"* ]]
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
+  [ -d "$ARNESS_ROOT/worktrees/a" ]
+  [ -f "$TMP/outside/keep.txt" ]
+  [ -z "$(git -C "$SRC/a" branch --list feat/x)" ]
+}
+
+@test "remove deletes the junctions Git for Windows leaves in node_modules, not what they point to" {
+  if ! command -v cygpath >/dev/null 2>&1; then skip "needs Git Bash (junctions)"; fi
+  mk_repo a
+  mk_wt a feat/x
+  echo node_modules/ >> "$SRC/a/.git/info/exclude"
+  mkdir -p "$TMP/outside" "$ARNESS_ROOT/worktrees/a/feat/x/node_modules/@s"
+  echo keep > "$TMP/outside/keep.txt"
+  cmd //c mklink //J "$(cygpath -w "$ARNESS_ROOT/worktrees/a/feat/x/node_modules/@s/pkg")" \
+    "$(cygpath -w "$TMP/outside")" >/dev/null
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
+  [ -f "$TMP/outside/keep.txt" ]
+}
+
+@test "remove never deletes by hand a worktree that git still lists" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_git_remove still-listed
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 13 ]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]]
+  [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
+  [ -n "$(git -C "$SRC/a" branch --list feat/x)" ]
+}
+
+@test "remove never deletes by hand a worktree when git cannot list its worktrees" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_git_remove list-fails
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 13 ]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]]
+  [[ "$output" != *"note: git left"* ]]
+  [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
+}
+
+@test "remove reports rm-failed and still drops the branch when the left-behind dir is held" {
+  mkdir "$TMP/ro"; chmod a-w "$TMP/ro"
+  if : 2>/dev/null > "$TMP/ro/probe"; then skip "this system ignores a missing write permission (root, Windows)"; fi
+  mk_repo a
+  mk_wt a feat/x
+  fake_git_remove held
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 13 ]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ rm-failed ]]
+  [[ "$output" != *REMOVED* ]]
+  [ -d "$ARNESS_ROOT/worktrees/a/feat/x" ]
+  [ -z "$(git -C "$SRC/a" branch --list feat/x)" ]
+  [ -z "$(git -C "$SRC/a" worktree list --porcelain | grep "/worktrees/a/feat/x$")" ]
+}
+
+@test "remove never deletes by hand a worktree that git still lists in a list over 64 KB" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_git_remove still-listed-big
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 13 ]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]]
+  [[ "$output" != *"note: git left"* ]]
+  [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
+}
+
+@test "list and remove convert the worktrees dir with cygpath when it exists" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_cygpath ok
+  run "$SCRIPT" list --no-fetch
+  [ "$status" -eq 0 ]
+  [ "$(col feat/x 1)" = a ]
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
+  [ -d "$ARNESS_ROOT/worktrees/a" ]
+  grep -q -- '^-m .*/worktrees/a/$' "$CYGPATH_LOG"
+  grep -q -- '^-m .*/worktrees/a$' "$CYGPATH_LOG"
+}
+
+@test "list warns and leaves out a repo whose worktrees dir cygpath cannot convert" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_cygpath fail
+  run "$SCRIPT" list --no-fetch
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warning: cygpath cannot convert "*"/worktrees/a/; a not listed"* ]]
+  [[ "$output" == *NONE ]]
+}
+
+@test "remove stops with an error when cygpath cannot convert the worktrees dir" {
+  mk_repo a
+  mk_wt a feat/x
+  fake_cygpath fail
+  run "$SCRIPT" remove --source a feat/x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"error: cygpath cannot convert "*"/worktrees/a"* ]]
+  [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
+  [ -n "$(git -C "$SRC/a" branch --list feat/x)" ]
 }
 
 @test "remove several names at once" {
@@ -467,7 +647,7 @@ squash_merge_pr() {
   squash_merge_pr
   run "$SCRIPT" remove --source a pr/X-2
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REMOVED $ARNESS_ROOT/worktrees/a/pr/X-2"* ]]
+  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/pr/X-2")"* ]]
   [ ! -e "$ARNESS_ROOT/worktrees/a/pr" ]
   [ -z "$(git -C "$SRC/a" branch --list pr/X-2)" ]
   ! git -C "$SRC/a" rev-parse --verify --quiet refs/remotes/origin/pr/X-2
@@ -525,7 +705,7 @@ commit_on_pr_wt() {
   commit_on_pr_wt push
   run "$SCRIPT" remove --source a pr/X-2
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REMOVED $ARNESS_ROOT/worktrees/a/pr/X-2"* ]]
+  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/pr/X-2")"* ]]
   [ -z "$(git -C "$SRC/a" branch --list pr/X-2)" ]
 }
 
@@ -617,7 +797,7 @@ commit_on_remote_wt() {
   commit_on_remote_wt push
   run "$SCRIPT" remove --source a w
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REMOVED $ARNESS_ROOT/worktrees/a/w"* ]]
+  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/w")"* ]]
   [ -z "$(git -C "$SRC/a" branch --list w)" ]
   git -C "$ORIGIN" rev-parse --verify --quiet refs/heads/w >/dev/null
 }
@@ -844,7 +1024,7 @@ mk_detached() {
   mk_detached a release/1.0 release/1.0
   run "$SCRIPT" remove --source a release/1.0
   [ "$status" -eq 0 ]
-  [ "$output" = "REMOVED $ARNESS_ROOT/worktrees/a/release/1.0" ]
+  [ "$output" = "REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/release/1.0")" ]
   [ ! -e "$ARNESS_ROOT/worktrees/a/release" ]
   [ "$(git -C "$SRC/a" branch --format='%(refname:short)' | tr '\n' ' ')" = "main release/1.0 " ]
   [ -z "$(git -C "$SRC/a" config --get-regexp '^arness-worktree\.' || true)" ]

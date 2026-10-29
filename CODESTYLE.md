@@ -52,6 +52,8 @@ Each of these has broken a script here that looked fine.
 | `sed 's/[áé]/x/'`: in the C locale a multibyte class matches single bytes. | One literal substitution per character (`s/á/a/g; s/é/e/g`). |
 | `cmd > f.tmp && mv f.tmp f`: when `cmd` fails, `f.tmp` is left behind. | `trap 'rm -f "$tmp"' EXIT`, or remove it in the failure branch. |
 | Judging a bats run by `bats … \| tail -n N`: a `not ok` above the last lines goes unseen and the run looks green. | `bats … \| grep -c '^not ok'` (must be 0), or read the exit code. |
+| Comparing a path built in the shell with one git prints, in Git Bash on Windows: git gives `C:/Users/...` with the casing on disk, the shell gives `/c/Users/...` with the casing it was typed with, so the same folder does not match. | Convert with `cygpath -m` before comparing: it fixes the drive form, not the casing, so a path typed with other casing still does not match. Treat no match as not found, and act (remove, write) only after an exact match, on git's path or on the one that matched it. |
+| Deleting a dir that may hold junctions, in Git Bash on Windows (npm makes one in `node_modules` per workspace package, and Git Bash sees it as a symlink): `rm -rf <junction>/`, with a trailing slash, empties its target. Git for Windows 2.54+ leaves junctions when it deletes a dir: `git worktree remove` keeps them and the dirs above them, and still exits 0. | `rm -rf "$dir"` with no trailing slash: it deletes a junction, not what it points to. After git removes a dir, check that it is gone. In a test, make a junction with `cmd //c mklink //J "$(cygpath -w <link>)" "$(cygpath -w <target>)"`: `ln -s` may copy the dir, and `mklink /D` needs a privilege. |
 
 ## Skills
 

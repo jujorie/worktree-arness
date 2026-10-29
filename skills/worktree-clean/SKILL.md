@@ -17,7 +17,7 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
    ```bash
    skills/worktree-clean/scripts/worktree-clean.sh list
    ```
-   - `NONE`: tell the user there is nothing to clean. Done.
+   - `NONE`: tell the user there is nothing to clean. Done. But a `warning: cygpath cannot convert …; <repo> not listed` on stderr means that repo's worktrees were left out: say so instead.
    - `NO_SOURCE` (exit 4): no repo in `source/`. Done.
    - Otherwise one tab-separated row per worktree: `repo name branch base status ahead path`.
 2. Show a numbered markdown table: `#`, repo, name, base, status, ahead. When branch is `(detached)`, write the base as `detached: <base>` (e.g. `detached: origin/release/1.2`), so it reads as a branch checked out to look at, not a task. Status meaning:
@@ -41,6 +41,8 @@ All logic is in `scripts/worktree-clean.sh` (in this skill's folder). Do not run
    ```
    Before removing each worktree, `remove` stops the npm scripts the `npm-run` skill started in it (dev servers, watchers): once the folder is gone they would keep running and holding their ports. Scripts started by hand, outside `npm-run`, are not seen.
 6. Report each `STOPPED <repo>/<name> <script> <pid>`, each `REMOVED <path>` and each `SKIPPED <path> <reason>` (exit 13 means at least one skipped). `stop-failed`: its npm scripts could not be stopped, so the worktree was kept; show the `warning:` from stderr.
+   - A `note: git left <path> behind; deleting it` on stderr is not a failure: git unregistered the worktree but left part of its dir, and the script deleted the rest. Seen on Windows: Git for Windows 2.54+ never deletes the junctions npm makes in `node_modules` (it still exits 0), and can stop half-way on a big `node_modules`. Never finish such a dir by hand.
+   - `rm-failed`: same case, but part of the dir is still held (an editor, a terminal or a process open in it). Git already let the worktree go and its branch is deleted; rerunning `remove` gives `not-a-worktree`. Tell the user what may hold it; once it is closed, the user can delete the leftover folder (it is no longer a worktree). Do not delete it yourself.
 
 ## Rules
 

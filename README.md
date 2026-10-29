@@ -68,7 +68,7 @@ sudo apt install bats shellcheck             # Ubuntu / WSL
 ./scripts/test.sh
 ```
 
-CI runs the same suite on Ubuntu and macOS (`.github/workflows/test.yml`).
+CI runs the same suite on Ubuntu and macOS (`.github/workflows/test.yml`). Git Bash on Windows is best effort: CI does not run there, and in Git Bash `./scripts/test.sh` still fails the symlink tests (Windows symlinks) and some tests in `tests/`, as on `main`.
 Scripts must stay portable: bash 3.2 (macOS default) compatible, no GNU-only flags (`sed -i`, `readlink -f`, `mapfile`...). The tests check this.
 
 ## Contributing

@@ -2,6 +2,8 @@
 # Unit tests for skills/worktree-config/scripts/worktree-config.sh.
 # Each test runs against a throwaway ARNESS_ROOT with a local repo in source/.
 
+load ../../../tests/helpers
+
 SKILL_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 SCRIPT="$SKILL_DIR/scripts/worktree-config.sh"
 
@@ -45,6 +47,14 @@ teardown() { rm -rf "$TMP"; }
   [ "$output" = "NO_WORKTREE" ]
 }
 
+@test "-h prints the whole header, exit codes included" {
+  run "$SCRIPT" -h
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Exit codes:"* ]]
+  [[ "$output" == *"13 some file skipped."* ]]
+  [[ "$output" != *"set -euo"* ]]
+}
+
 @test "NO_WORKTREE when the slug has no name" {
   run "$SCRIPT" a
   [ "$status" -eq 5 ]
@@ -81,6 +91,24 @@ teardown() { rm -rf "$TMP"; }
 @test "NOT_FOUND for an unknown repo" {
   run "$SCRIPT" zzz/x
   [ "$status" -eq 4 ]
+}
+
+@test "the worktree path is converted with cygpath when it exists" {
+  fake_cygpath ok
+  cfg a f.txt hi
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [ "$(cat "$(WT a feat/x)/f.txt")" = hi ]
+  grep -q -- '^-m .*/worktrees/a/feat/x$' "$CYGPATH_LOG"
+}
+
+@test "stops with an error and copies nothing when cygpath cannot convert the worktree path" {
+  fake_cygpath fail
+  cfg a f.txt hi
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"error: cygpath cannot convert "*"/worktrees/a/feat/x"* ]]
+  [ "$(cat "$(WT a feat/x)/f.txt")" = 1 ]
 }
 
 # --- copy ----------------------------------------------------------------
