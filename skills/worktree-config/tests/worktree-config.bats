@@ -83,6 +83,26 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -eq 4 ]
 }
 
+@test "finds the worktree in a list over 64 KB" {
+  local real_git
+  real_git="$(command -v git)"
+  mkdir -p "$TMP/bin"
+  # git that adds 5000 other worktrees after the real ones
+  cat > "$TMP/bin/git" <<EOF
+#!/usr/bin/env bash
+"$real_git" "\$@" || exit
+case "\$*" in
+  *"worktree list"*) for i in \$(seq 5000); do printf 'worktree /elsewhere/%s\nHEAD %040d\ndetached\n\n' "\$i" 0; done ;;
+esac
+EOF
+  chmod +x "$TMP/bin/git"
+  export PATH="$TMP/bin:$PATH"
+  cfg a f.txt hi
+  run "$SCRIPT" a/feat/x
+  [ "$status" -eq 0 ]
+  [ "$(cat "$(WT a feat/x)/f.txt")" = hi ]
+}
+
 # --- copy ----------------------------------------------------------------
 
 @test "NO_CONFIG when config/<repo> does not exist" {

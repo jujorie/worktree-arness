@@ -132,9 +132,12 @@ main() {
   root="$(cd -P "$root" && pwd -P)"   # git reports physical paths
   WT="$root/worktrees/$repo/$name"
 
-  # It must be a real worktree of source/<repo>, not just a folder.
+  # It must be a real worktree of source/<repo>, not just a folder. The list is captured and checked with a
+  # here-string: piped into `grep -q`, a list over 64 KB kills git with SIGPIPE (CODESTYLE, Pitfalls).
+  local wts
   if [ -L "$WT" ] || [ ! -e "$root/source/$repo/.git" ] ||
-     ! git -C "$root/source/$repo" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $WT"; then
+     ! wts="$(git -C "$root/source/$repo" worktree list --porcelain 2>/dev/null)" ||
+     ! grep -Fxq "worktree $WT" <<<"$wts"; then
     echo "NOT_FOUND $WT"
     exit "$EXIT_NOT_FOUND"
   fi

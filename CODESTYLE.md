@@ -41,7 +41,7 @@ Each of these has broken a script here that looked fine.
 
 | Pitfall | Do instead |
 |---|---|
-| `cmd \| head -n N` under `pipefail`: once the output exceeds the pipe buffer (64 KB), `cmd` dies with SIGPIPE (exit 141). Small test data hides it. | `cmd \| awk 'NR <= N'` (awk reads all its input). Test with big data too. |
+| `cmd \| head -n N` or `cmd \| grep -q x` under `pipefail`: both stop reading early, so once the output exceeds the pipe buffer (64 KB), `cmd` dies with SIGPIPE (exit 141). As an `if` condition, the pipeline is then false even though `grep` found the line. Small test data hides it. | `cmd \| awk 'NR <= N'` (awk reads all its input). For a check, capture the output and use a here-string: `out="$(cmd)"`, then `grep -q x <<<"$out"`. Test with big data too. |
 | A function that prints a status and exits, called as `x="$(f)"`: the status stays in `x` and the `exit` only leaves the subshell. | `x="$(f)" \|\| rc=$?`, then print `$x` and `exit "$rc"`. |
 | `v="…$([ "$a" = b ] && echo y)…"`: when the test is false the assignment returns 1 and `set -e` stops the script. | Compute the piece with an `if` before the assignment. |
 | A `case … esac` inside `$(…)`: bash 3.2 cannot parse it (`bash -n` does not notice). | Move the `case` into a function and call it. |
