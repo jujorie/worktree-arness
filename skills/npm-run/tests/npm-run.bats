@@ -334,4 +334,287 @@ teardown() {
   run "$SCRIPT" -h
   [ "$status" -eq 0 ]
   [[ "$output" == *"Exit codes:"* ]]
+  [[ "$output" == *"13 node version of .nvmrc not installed"* ]]
+}
+
+# --- .nvmrc ------------------------------------------------------------------------
+
+# fake_node <dir> <version>: a node in <dir> that answers --version with v<version> and runs the real
+# node for anything else, so npm keeps working through it.
+fake_node() {
+  mkdir -p "$1"
+  printf '#!/usr/bin/env bash\nif [ "${1:-}" = --version ]; then echo v%s; exit 0; fi\nexec "%s" "$@"\n' \
+    "$2" "$REAL_NODE" > "$1/node"
+  chmod +x "$1/node"
+  # Windows: npm runs scripts with cmd.exe, which only finds node.exe / node.cmd.
+  if command -v cygpath >/dev/null 2>&1; then
+    printf '@echo off\r\nif "%%~1"=="--version" (echo v%s& exit /b 0)\r\n"%s" %%*\r\n' \
+      "$2" "$(cygpath -w "$REAL_NODE")" > "$1/node.cmd"
+  fi
+}
+
+nvmrc_setup() {
+  REAL_NODE="$(command -v node)"
+  # No nvm of this machine: NVM_DIR set to an empty folder (unset, it would look in ~/.nvm and the XDG one) and no NVM_HOME.
+  export NVM_DIR="$TMP/no-nvm"
+  unset NVM_HOME
+  # A script that reports the node it sees.
+  cat > "$(WT a/feat/x)/package.json" <<'JSON'
+{ "name": "fixture", "version": "1.0.0", "scripts": { "ver": "node --version" } }
+JSON
+}
+
+@test ".nvmrc: the exact version from nvm runs install and the script" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  fake_node "$NVM_DIR/versions/node/v20.19.0/bin" 20.19.0
+  echo v22.17.1 > "$(WT a/feat/x)/.nvmrc"
+  rm -rf "$(WT a/feat/x)/node_modules"
+  run "$SCRIPT" run --install ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+  [[ "${lines[1]}" == "INSTALLED a/feat/x "* ]]
+  [[ "${lines[2]}" == "FINISHED a/feat/x ver 0 "* ]]
+  grep -qx v22.17.1 "$(state a/feat/x)/ver.log"
+}
+
+@test ".nvmrc: a major version picks the highest installed one, nvm-windows layout too" {
+  nvmrc_setup
+  export NVM_HOME="$TMP/nvm-windows"
+  fake_node "$NVM_HOME/v22.9.0" 22.9.0
+  fake_node "$NVM_HOME/v22.17.1" 22.17.1
+  fake_node "$NVM_HOME/v24.10.0" 24.10.0
+  printf '22\r\n' > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+  grep -qx v22.17.1 "$(state a/feat/x)/ver.log"
+}
+
+@test ".nvmrc: a version nvm does not have stops with NO_NODE_VERSION; nothing runs" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v20.19.0/bin" 20.19.0
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 99.1" ]
+  [ ! -e "$(state a/feat/x)/ver.log" ]
+  # Without node_modules it is found before the install question, not after it.
+  rm -rf "$(WT a/feat/x)/node_modules"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 99.1" ]
+}
+
+@test ".nvmrc: a BOM, comments and blank lines are skipped; 2 does not match 22" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  printf '\357\273\277\n# pinned for the project\nv22 # LTS\n' > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+  echo 2 > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 2" ]
+}
+
+@test ".nvmrc: without nvm, a current node that matches runs and is reported with NODE" {
+  nvmrc_setup
+  local cur
+  cur="$(node --version)"
+  echo "${cur%%.*}" > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x ${cur#v}" ]
+  [[ "${lines[1]}" == "FINISHED a/feat/x ver 0 "* ]]
+}
+
+@test ".nvmrc: NO_COMMAND and UNKNOWN_SCRIPT come before NO_NODE_VERSION" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v20.19.0/bin" 20.19.0
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run
+  [ "$status" -eq 5 ]
+  [ "${lines[0]}" = "NO_COMMAND a/feat/x" ]
+  [ "${lines[1]}" = "SCRIPT ver" ]
+  run "$SCRIPT" run vre
+  [ "$status" -eq 7 ]
+  [ "${lines[0]}" = "UNKNOWN_SCRIPT a/feat/x vre" ]
+}
+
+@test ".nvmrc: 22.x picks the highest 22.x, like 22" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.9.0/bin" 22.9.0
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  echo 22.x > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+}
+
+@test ".nvmrc: with NVM_DIR unset, nvm is also found in the XDG config folder" {
+  nvmrc_setup
+  unset NVM_DIR XDG_CONFIG_HOME
+  fake_node "$TMP/home/.config/nvm/versions/node/v22.17.1/bin" 22.17.1
+  echo 22 > "$(WT a/feat/x)/.nvmrc"
+  HOME="$TMP/home" run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+  # A version it lacks stops there too: that nvm counts as installed.
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  HOME="$TMP/home" run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 99.1" ]
+  # XDG_CONFIG_HOME, when set, is where it looks.
+  mkdir -p "$TMP/xdg"
+  mv "$TMP/home/.config/nvm" "$TMP/xdg/nvm"
+  echo 22 > "$(WT a/feat/x)/.nvmrc"
+  HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+}
+
+@test ".nvmrc: a big file is read without SIGPIPE" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  awk 'BEGIN { print 22; for (i = 0; i < 200000; i++) print "22.17.1" }' > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+}
+
+@test ".nvmrc: without nvm, a current node that does not match runs with a warning" {
+  nvmrc_setup
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warning: .nvmrc asks for node 99.1 and there is no nvm; using the current node "[0-9]* ]]
+  [[ "$output" == *"FINISHED a/feat/x ver 0 "* ]]
+  [[ "$output" != *NODE\ a/feat/x* ]]
+  rm -f "$(state a/feat/x)/ver.log"
+  # An nvm-windows install counts as nvm, even when its folder has no versions.
+  export NVM_HOME="$TMP/nvm-windows-empty"
+  mkdir -p "$NVM_HOME"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [[ "$output" == *"NO_NODE_VERSION a/feat/x 99.1" ]]
+  [ ! -e "$(state a/feat/x)/ver.log" ]
+  # So does a fresh nvm with no version installed yet.
+  unset NVM_HOME
+  export NVM_DIR="$TMP/nvm-fresh"
+  mkdir -p "$NVM_DIR"
+  touch "$NVM_DIR/nvm.sh"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 99.1" ]
+}
+
+@test ".nvmrc: an alias is not resolved; NODE_UNRESOLVED, and the current node runs" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  echo 'lts/*' > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"note: .nvmrc asks for 'lts/*', an alias npm-run does not resolve"* ]]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x lts/*"* ]]
+  [[ "$output" == *"FINISHED a/feat/x ver 0 "* ]]
+  [[ "$output" != *"NODE a/feat/x"* ]]
+}
+
+@test ".nvmrc: the NODE or NODE_UNRESOLVED line comes before the install question" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  rm -rf "$(WT a/feat/x)/node_modules"
+  echo 22 > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 11 ]
+  [ "$output" = "NODE a/feat/x 22.17.1"$'\n'"CONFIRM_INSTALL a/feat/x" ]
+  echo 'lts/*' > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 11 ]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x lts/*"*"CONFIRM_INSTALL a/feat/x" ]]
+}
+
+@test ".nvmrc: only the first field counts, and v or .x alone is not a version" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  printf '  22 20\n' > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+  echo v > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x v"$'\n'* ]]
+  echo .x > "$(WT a/feat/x)/.nvmrc"
+  run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x .x"$'\n'* ]]
+}
+
+@test ".nvmrc: without npm in PATH, a version nvm lacks is reported first" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v20.19.0/bin" 20.19.0
+  no_node_path
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  PATH="$NO_NODE_PATH" run "$SCRIPT" run
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 99.1" ]
+}
+
+# no_node_path: NO_NODE_PATH = PATH without the folders of the global node and npm. Skips the test when
+# node shares a folder with git or bash, which the scripts need.
+no_node_path() {
+  local d IFS=:
+  NO_NODE_PATH=""
+  for d in $PATH; do
+    if [ -x "$d/npm" ] || [ -x "$d/node" ] || [ -x "$d/node.exe" ]; then
+      if [ -x "$d/git" ] || [ -x "$d/bash" ]; then skip "node shares a folder with git or bash here"; fi
+      continue
+    fi
+    NO_NODE_PATH="${NO_NODE_PATH:+$NO_NODE_PATH:}$d"
+  done
+}
+
+@test ".nvmrc: npm reachable only through nvm still runs" {
+  nvmrc_setup
+  local real_npm
+  real_npm="$(command -v npm)"
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v22.17.1/bin" 22.17.1
+  printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$real_npm" > "$NVM_DIR/versions/node/v22.17.1/bin/npm"
+  chmod +x "$NVM_DIR/versions/node/v22.17.1/bin/npm"
+  no_node_path
+  echo 22 > "$(WT a/feat/x)/.nvmrc"
+  PATH="$NO_NODE_PATH" run "$SCRIPT" run ver
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
+  grep -qx v22.17.1 "$(state a/feat/x)/ver.log"
+}
+
+@test "ps, stop and clean work without npm in PATH; scripts still needs it" {
+  no_node_path
+  PATH="$NO_NODE_PATH" run "$SCRIPT" ps
+  [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
+  PATH="$NO_NODE_PATH" run "$SCRIPT" stop --all
+  [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
+  PATH="$NO_NODE_PATH" run "$SCRIPT" clean
+  [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
+  PATH="$NO_NODE_PATH" run "$SCRIPT" scripts
+  [ "$status" -eq 3 ]
+  [ "$output" = "NO_NPM" ]
 }

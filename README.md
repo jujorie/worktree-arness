@@ -52,7 +52,7 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; `--detach` checks out an existing branch as it is (e.g. a release); fails with `NO_SOURCE` / `NO_NAME` |
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
-| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies); list, stop and clean up after them |
+| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies), with the node version of its `.nvmrc` from nvm; list, stop and clean up after them |
 | `learnings-save` | Review the conversation for what was learned and save each item where it belongs (memory, `CODESTYLE.md`, a skill, a README); use before clearing the context |
 | `plugin-manage` | Add, update, remove and list plugins in `plugins/`; shows each plugin's permission rules and install command and asks before running them |
 
