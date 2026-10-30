@@ -769,6 +769,107 @@ mk_detached() {
   [ "$(col release/1.0 6)" = "0" ]
 }
 
+@test "list refreshes the base of a detached worktree: a commit that reached it in origin by another path is no longer NOT_MERGED" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git_q -C "$ORIGIN" branch epic/X-1
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  mk_detached a pr origin/epic/X-1
+  # The commit reaches epic/X-1 in origin by another path (another clone, a merge commit there), so this
+  # clone's origin/epic/X-1 is stale. A `git push origin HEAD:epic/X-1` from the worktree would update it
+  # itself (worktrees share refs), unless the clone is single-branch (--depth). A squash or rebase merge is
+  # still not detected for a detached worktree: there is no branch to ask gh about.
+  echo 2 > "$ARNESS_ROOT/worktrees/a/pr/g.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/pr" add g.txt; git_q -C "$ARNESS_ROOT/worktrees/a/pr" commit -q -m c2
+  git_q -C "$ORIGIN" fetch -q "$ARNESS_ROOT/worktrees/a/pr" HEAD:refs/heads/epic/X-1
+  run "$SCRIPT" list --no-fetch
+  [ "$status" -eq 0 ]
+  [ "$(col pr 3)" = "(detached)" ]
+  [ "$(col pr 5)" = "NOT_MERGED" ]
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr 5)" = "EMPTY" ]
+  [ "$(git -C "$SRC/a" rev-parse origin/epic/X-1)" = "$(git -C "$ORIGIN" rev-parse epic/X-1)" ]
+}
+
+@test "list refreshes the base of a detached worktree: a commit dropped from it in origin is NOT_MERGED, not EMPTY" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git_q -C "$ORIGIN" branch epic/X-1
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  mk_detached a pr origin/epic/X-1
+  echo 2 > "$ARNESS_ROOT/worktrees/a/pr/g.txt"
+  git_q -C "$ARNESS_ROOT/worktrees/a/pr" add g.txt; git_q -C "$ARNESS_ROOT/worktrees/a/pr" commit -q -m c2
+  git_q -C "$ORIGIN" fetch -q "$ARNESS_ROOT/worktrees/a/pr" HEAD:refs/heads/epic/X-1
+  git_q -C "$SRC/a" fetch -q origin
+  # origin rewrites the base without the commit: only this clone's stale origin/epic/X-1 still holds it,
+  # and a remove without --force would lose it
+  git_q -C "$ORIGIN" branch -f epic/X-1 "$(git -C "$ORIGIN" rev-parse epic/X-1~1)"
+  run "$SCRIPT" list --no-fetch
+  [ "$status" -eq 0 ]
+  [ "$(col pr 5)" = "EMPTY" ]
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr 5)" = "NOT_MERGED" ]
+  [ "$(col pr 6)" = "1" ]
+}
+
+@test "a branch worktree based on origin/HEAD lists with no note about a HEAD branch" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  git_q -C "$SRC/a" worktree add -q -b w "$ARNESS_ROOT/worktrees/a/w" origin/HEAD
+  git_q -C "$SRC/a" config branch.w.arness-base origin/HEAD
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col w 5)" = "EMPTY" ]
+  [[ "$output" != *"note:"* ]]
+  [[ "$output" != *"warning:"* ]]
+}
+
+@test "a branch worktree based on HEAD lists with no note about a HEAD branch" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  git_q -C "$SRC/a" worktree add -q -b w "$ARNESS_ROOT/worktrees/a/w" HEAD
+  git_q -C "$SRC/a" config branch.w.arness-base HEAD
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col w 5)" = "EMPTY" ]
+  [[ "$output" != *"note:"* ]]
+  [[ "$output" != *"warning:"* ]]
+}
+
+@test "a detached worktree based on HEAD lists with no note about a HEAD branch" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  mk_detached a pr HEAD
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr 5)" = "EMPTY" ]
+  [[ "$output" != *"note:"* ]]
+  [[ "$output" != *"warning:"* ]]
+}
+
+@test "a detached worktree based on origin/HEAD is not fetched as a HEAD branch" {
+  ORIGIN="$TMP/origin"
+  git_q init -q "$ORIGIN"
+  echo 1 > "$ORIGIN/f.txt"; git_q -C "$ORIGIN" add f.txt; git_q -C "$ORIGIN" commit -q -m c1
+  git clone -q "$ORIGIN" "$SRC/a" 2>/dev/null
+  mk_detached a pr origin/HEAD
+  run "$SCRIPT" list
+  [ "$status" -eq 0 ]
+  [ "$(col pr 5)" = "EMPTY" ]
+  [[ "$output" != *"note:"* ]]
+  [[ "$output" != *"warning:"* ]]
+}
+
 @test "the recorded ref is still shown after that branch moves on" {
   mk_repo a
   git_q -C "$SRC/a" branch release/1.0
