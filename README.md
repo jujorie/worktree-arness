@@ -38,6 +38,7 @@ To share or migrate memory, copy the folder by hand (`cp -R .memory /path/to/oth
 | `worktrees/` | One worktree per task, `worktrees/<repo>/<name>` (git-ignored; see `worktrees/README.md`) |
 | `config/` | Local files copied into each new worktree, plus an optional `install.sh` (git-ignored; see `config/README.md`) |
 | `plugins/` | Plugins installed on this machine: git repos that bring their own skills, agents and tools, linked into `skills/` and `agents/` (git-ignored; see `plugins/README.md`) |
+| `projects/` | Data projects of this machine, `projects/<name>`, e.g. the default folder of plugin skills that create projects (git-ignored, only the root `/projects/`) |
 | `scripts/lib.sh` | Helpers (`link`, `copy_once`, `render`) sourced by setup scripts |
 | `tmp/` | Not in the repo (git-ignored), created by the scripts when needed: logs such as the `install.sh` output of `worktree-config` |
 | `.env` | Local settings shared by skills, `KEY=value` per line (git-ignored). Scripts read it without sourcing it; a variable set in the terminal wins |
