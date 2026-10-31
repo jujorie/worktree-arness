@@ -11,4 +11,5 @@
 *.bak
 /opencode.json
 /tmp/
+/projects/
 /.env
