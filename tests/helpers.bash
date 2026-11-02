@@ -1,5 +1,5 @@
 # Shared bats helpers. The tests in tests/ run against a throwaway copy of the repo; the skill tests
-# (skills/<name>/tests) load this file too, for fake_cygpath. REPO_ROOT is the repo root for both.
+# (skills/<name>/tests) load this file too. REPO_ROOT is the repo root for both.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
