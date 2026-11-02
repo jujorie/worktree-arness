@@ -6,7 +6,8 @@
   "permission": {
     "bash": {
       "skills/*/scripts/*.sh": "allow",
-      "skills/*/scripts/*.sh *": "allow"
+      "skills/*/scripts/*.sh *": "allow",
+      "skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"
     },
     "skill": {
       "repo-clone": "allow",
@@ -14,7 +15,8 @@
       "worktree-clean": "allow",
       "worktree-config": "allow",
       "npm-run": "allow",
-      "learnings-save": "allow"
+      "learnings-save": "allow",
+      "plugin-manage": "allow"
     }
   }
 }

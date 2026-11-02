@@ -53,6 +53,7 @@ Before asking for review, check that:
 - [ ] New behavior has bats tests, including the failure paths.
 - [ ] Docs are updated: the skill's `SKILL.md`, the folder README, `README.md` if the layout changed.
 - [ ] You edited the sources, not generated files (`.claude/`, `.agents/`, `CLAUDE.md`, `opencode.json`). Providers live in `providers/`.
+- [ ] A new shared agent is listed in the `agents/.gitignore` allowlist (`!/<name>.md`).
 - [ ] A new skill is listed in the `skills/.gitignore` allowlist, and, if it has a script, has its permission entries in `providers/claude/settings.json` and `providers/opencode/opencode.json`. `tests/repo.bats` fails if they are missing.
 - [ ] Examples are generic (`PROJ-123`, `my-repo`): no company, customer or internal project names, no secrets, no personal paths.
 

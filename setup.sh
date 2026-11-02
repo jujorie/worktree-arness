@@ -58,6 +58,13 @@ if [ -z "${selected// /}" ]; then
   exit 1
 fi
 
+# Plugins (plugins/README.md): restore their links. Their rules are rendered by each provider below.
+plugin_manage="$ARNESS_ROOT/skills/plugin-manage/scripts/plugin-manage.sh"
+if [ -d "$ARNESS_ROOT/plugins" ] && [ -f "$plugin_manage" ]; then
+  echo "==> plugins"
+  bash "$plugin_manage" sync | sed 's/^/  /'
+fi
+
 for p in $selected; do
   echo "==> $p"
   bash "$ARNESS_ROOT/providers/$p/setup.sh"

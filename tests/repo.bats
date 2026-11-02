@@ -86,12 +86,14 @@ permission_problems() {
     for f in "$d"scripts/*.sh; do
       [ -e "$f" ] || continue
       f="$(basename "$f")"
+      # Either the whole script ("<script> *") or some of its subcommands ("<script> list"), so a
+      # skill can keep a command that writes out of the allowlist and have the agent ask first.
       for rule in "Bash(skills/$s/scripts/$f *)" "Bash({{\$ARNESS_ROOT}}/skills/$s/scripts/$f *)"; do
-        grep -qF "\"$rule\"" "$claude" || echo "claude: missing $rule"
+        grep -qF "\"${rule% \*)} " "$claude" || echo "claude: missing $rule"
       done
       md="$d/SKILL.md"
       if [ ! -f "$md" ]; then echo "skill $s: no SKILL.md"
-      elif ! grep '^allowed-tools:' "$md" | grep -qF "Bash(skills/$s/scripts/$f *)"; then
+      elif ! grep '^allowed-tools:' "$md" | grep -qF "Bash(skills/$s/scripts/$f "; then
         echo "skill $s: allowed-tools lacks $f"
       fi
     done
@@ -223,4 +225,23 @@ mk_git_root() {
   while IFS= read -r name; do
     ! git -C "$REPO_ROOT" check-ignore -q "skills/$name/SKILL.md"
   done < <(git -C "$REPO_ROOT" ls-files skills | cut -d/ -f2 | sort -u | grep -v '^README.md$')
+}
+
+@test "unlisted agents are git-ignored and the agents README is not" {
+  git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout"
+  git -C "$REPO_ROOT" check-ignore -q agents/anything-else.md
+  ! git -C "$REPO_ROOT" check-ignore -q agents/README.md
+  ! git -C "$REPO_ROOT" check-ignore -q agents/.gitignore
+}
+
+@test "the plugin rules marker is the first entry of permissions.allow" {
+  # Anywhere else the rendered rules would leave a trailing comma before the closing bracket.
+  awk '/"allow": \[/ { getline; print; exit }' "$REPO_ROOT/providers/claude/settings.json" | grep -qF '{{$PLUGIN_ALLOW}}'
+  [ "$(grep -cF '{{$PLUGIN_ALLOW}}' "$REPO_ROOT/providers/claude/settings.json")" -eq 1 ]
+}
+
+@test "plugin-manage apply is never pre-allowed" {
+  ! grep -F 'plugin-manage.sh' "$REPO_ROOT/providers/claude/settings.json" | grep -qE 'plugin-manage\.sh (\*|apply)'
+  ! grep '^allowed-tools:' "$REPO_ROOT/skills/plugin-manage/SKILL.md" | grep -qE 'plugin-manage\.sh (\*|apply)'
+  grep -qF '"skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"' "$REPO_ROOT/providers/opencode/opencode.json"
 }

@@ -145,3 +145,43 @@ teardown() { cleanup_sandbox; }
   [ ! -s "$FAKE_CALLS" ]
   [ "$(readlink "$SANDBOX/.claude/skills")" = "../skills" ]
 }
+
+@test "render without plugins drops the plugin rules marker line" {
+  with_lib 'render providers/claude/settings.json .claude/settings.json'
+  ! grep -qF 'PLUGIN_ALLOW' "$SANDBOX/.claude/settings.json"
+  [ "$(grep -c . "$SANDBOX/.claude/settings.json")" -eq "$(( $(grep -c . "$SANDBOX/providers/claude/settings.json") - 1 ))" ]
+  json_looks_valid "$SANDBOX/.claude/settings.json"
+}
+
+@test "render inserts the rules of each plugin state" {
+  mkdir -p "$SANDBOX/plugins"
+  printf '%s\n' 'commit=abc' 'allow.claude=Skill(demo-a)' 'allow.claude=Bash(demo-tool *)' > "$SANDBOX/plugins/.demo.state"
+  with_lib 'render providers/claude/settings.json .claude/settings.json'
+  for rule in 'Skill(demo-a)' 'Bash(demo-tool *)'; do
+    grep -qxF "      \"$rule\"," "$SANDBOX/.claude/settings.json"
+  done
+  json_looks_valid "$SANDBOX/.claude/settings.json"
+}
+
+@test "render ignores a clone's manifest and drops rules that could break the JSON" {
+  mkdir -p "$SANDBOX/plugins/demo"
+  printf '%s\n' 'skills=x' 'allow.claude=Bash(*)' > "$SANDBOX/plugins/demo/arness-plugin.conf"
+  printf '%s\n' 'allow.claude=x"],"defaultMode":"bypassPermissions","y":["' 'allow.claude=a\b' 'allow.claude=Skill(ok)' \
+    > "$SANDBOX/plugins/.demo.state"
+  run with_lib 'render providers/claude/settings.json .claude/settings.json'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unsafe rule in .demo.state skipped"* ]]
+  ! grep -qF 'bypassPermissions' "$SANDBOX/.claude/settings.json"
+  ! grep -qF 'Bash(*)' "$SANDBOX/.claude/settings.json"
+  ! grep -qF 'a\b' "$SANDBOX/.claude/settings.json"
+  grep -qF '"Skill(ok)",' "$SANDBOX/.claude/settings.json"
+  json_looks_valid "$SANDBOX/.claude/settings.json"
+}
+
+@test "conf_value prints every value of a key and nothing for a missing file" {
+  printf '%s\n' 'a=1' 'ab=2' 'a=x=y' '# a=3' > "$SANDBOX/c.conf"
+  run with_lib 'conf_value "$ARNESS_ROOT/c.conf" a'
+  [ "$output" = "$(printf '1\nx=y')" ]
+  run with_lib 'conf_value "$ARNESS_ROOT/missing.conf" a'
+  [ "$status" -eq 0 ] && [ -z "$output" ]
+}

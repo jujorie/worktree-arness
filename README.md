@@ -37,6 +37,8 @@ To share or migrate memory, copy the folder by hand (`cp -R .memory /path/to/oth
 | `source/` | Repo clones, origin of the worktrees (git-ignored; see `source/README.md`) |
 | `worktrees/` | One worktree per task, `worktrees/<repo>/<name>` (git-ignored; see `worktrees/README.md`) |
 | `config/` | Local files copied into each new worktree, plus an optional `install.sh` (git-ignored; see `config/README.md`) |
+| `plugins/` | Plugins installed on this machine: git repos that bring their own skills, agents and tools, linked into `skills/` and `agents/` (git-ignored; see `plugins/README.md`) |
+| `projects/` | Data projects of this machine, `projects/<name>`, e.g. the default folder of plugin skills that create projects (git-ignored, only the root `/projects/`) |
 | `scripts/lib.sh` | Helpers (`link`, `copy_once`, `render`) sourced by setup scripts |
 | `tmp/` | Not in the repo (git-ignored), created by the scripts when needed: logs such as the `install.sh` output of `worktree-config` |
 | `.env` | Local settings shared by skills, `KEY=value` per line (git-ignored). Scripts read it without sourcing it; a variable set in the terminal wins |
@@ -51,8 +53,9 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; `--detach` checks out an existing branch as it is (e.g. a release); fails with `NO_SOURCE` / `NO_NAME` |
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
-| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies); list, stop and clean up after them |
+| `npm-run` | Run a `package.json` script of a worktree in the background (asks which worktree if there are several, and before installing dependencies), with the node version of its `.nvmrc` from nvm; list, stop and clean up after them |
 | `learnings-save` | Review the conversation for what was learned and save each item where it belongs (memory, `CODESTYLE.md`, a skill, a README); use before clearing the context |
+| `plugin-manage` | Add, update, remove and list plugins in `plugins/`; shows each plugin's permission rules and install command and asks before running them |
 
 Rules for new skills: scripts go in `skills/<name>/scripts/`, tests in `skills/<name>/tests/`, and `name` in `SKILL.md` must equal the folder name.
 
