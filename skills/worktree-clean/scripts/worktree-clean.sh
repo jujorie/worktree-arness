@@ -25,9 +25,9 @@
 #   SKIPPED <path|name> <reason>   reason: invalid-name | not-a-worktree | git-failed | stop-failed |
 #                                  rm-failed | NOT_MERGED | DIRTY | UNKNOWN_BASE (these three need --force)
 #   If git unregisters a worktree but leaves part of its dir, the rest is deleted with rm -rf and a note
-#   goes to stderr. Git for Windows does that with exit 0 when the dir holds a junction (npm makes one in
-#   node_modules per workspace package), or stops with "Directory not empty". A worktree git still lists
-#   is skipped.
+#   goes to stderr, on any OS. Git for Windows does that with exit 0 when the dir holds a junction (npm
+#   makes one in node_modules per workspace package), or stops with "Directory not empty". A worktree git
+#   still lists is skipped.
 #   rm-failed: git let the worktree go and its branch is deleted, but part of the dir is still in use;
 #   it is no longer a worktree, so the user can delete it once whatever holds it is closed.
 # Before a worktree is removed, the npm scripts npm-run started in it (dev servers, watchers) are stopped
