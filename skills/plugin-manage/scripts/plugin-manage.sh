@@ -30,6 +30,9 @@
 #   OPENCODE_UNGATED <file>               that opencode.json lets OpenCode run `apply` without asking:
 #                                         it lacks the "ask" rule of providers/opencode/opencode.json
 #   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder by apply
+#   DROPPED_SETTING <line>                a line of .claude/settings.json edited by hand (no template or
+#                                         plugin rule gives it): apply renders the file again and loses
+#                                         it. Move it to .claude/settings.local.json before apply
 #   CONFIRM_ADD <name> <commit>           plan printed; nothing written (exit 20)
 #   CONFIRM_UPDATE <name> <from> <to> <ref>   plan printed; nothing written (exit 20)
 #   CONFIRM_REMOVE <name>                 plan printed; nothing written (exit 20)
@@ -302,6 +305,7 @@ print_plan() {
   if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
   if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
   check_opencode_gate
+  print_dropped
 }
 
 print_manual() {
@@ -384,6 +388,24 @@ unlink_plugin() {
   for p in "$ROOT"/skills/* "$ROOT"/agents/*; do
     if belongs_to "$p" "$name"; then rm "$p"; fi
   done
+}
+
+# settings_lines: each line of a settings file trimmed and without its trailing comma; blank ones dropped.
+settings_lines() { awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]*,?[ \t]*$/, ""); if ($0 != "") print }'; }
+
+# Lines of the Claude Code settings added by hand to the generated file, which every apply loses when
+# it renders it again (the .bak that keeps them is replaced by the next render): a diff against what
+# the template and the installed plugins' rules render today, so position counts and a template rule
+# moved into another block (e.g. a hand-made "ask": [ ... ]) is listed with it. Compared trimmed and
+# without a trailing comma, so indentation and the last item of a list do not count. Prints one
+# DROPPED_SETTING line each; what belongs to the user goes in .claude/settings.local.json, which is
+# never rendered. Lines removed by hand are not listed: the render brings them back.
+print_dropped() {
+  local dest="$ROOT/.claude/settings.json"
+  [ -f "$dest" ] || return 0
+  # diff exits 1 when the files differ: that is the case to report, not an error.
+  { diff <(render_text providers/claude/settings.json "$(plugin_allow_claude)" | settings_lines) \
+      <(settings_lines < "$dest") || true; } | sed -n 's/^> /DROPPED_SETTING /p'
 }
 
 # Re-render the Claude Code settings when that provider is set up, so plugin rules follow the plugins.
@@ -647,6 +669,7 @@ cmd_remove() {
   for n in $(state_value "$name" agents); do echo "AGENT $n"; done
   uninstall="$(state_value "$name" uninstall)"
   if [ -n "$uninstall" ]; then echo "UNINSTALL $uninstall"; fi
+  print_dropped
   fail "$EXIT_CONFIRM" "CONFIRM_REMOVE $name"
 }
 

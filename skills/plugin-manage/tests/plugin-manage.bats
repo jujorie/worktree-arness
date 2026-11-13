@@ -149,6 +149,43 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   json_looks_valid "$SANDBOX/.claude/settings.json"
 }
 
+@test "the plans list the hand edits of .claude/settings.json that apply would lose" {
+  bash "$SANDBOX/setup.sh" --provider claude >/dev/null
+  # A freshly rendered file has no hand edits, also with a plugin installed.
+  run "$SCRIPT" add "$URL"
+  [[ "$output" != *DROPPED_SETTING* ]]
+  add_demo
+  run "$SCRIPT" remove demo
+  [[ "$output" != *DROPPED_SETTING* ]]
+  # Two rules and a key added by hand, as a person editing the generated file would.
+  awk '{ print } /"allow": \[/ { print "      \"Bash(gh pr review:*)\","; print "      \"Skill(my-private)\"," }
+       /"autoMemoryEnabled"/ { print "  \"model\": \"opus\"," }' "$SANDBOX/.claude/settings.json" > "$BATS_TEST_TMPDIR/s"
+  mv "$BATS_TEST_TMPDIR/s" "$SANDBOX/.claude/settings.json"
+  run "$SCRIPT" remove demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "Bash(gh pr review:*)"'
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "Skill(my-private)"'
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "model": "opus"'
+  [ "$(printf '%s\n' "$output" | grep -c '^DROPPED_SETTING')" -eq 3 ]
+  # The plugin's own rules are not hand edits; update lists the same lines.
+  [[ "$output" != *'DROPPED_SETTING "Skill(demo-hello)"'* ]]
+  echo x >> "$ORIGIN/README.md"; commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^DROPPED_SETTING')" -eq 3 ]
+  # A template rule moved by hand into a new block is listed with the block, not only its opening line.
+  awk '{ print } /"autoMemoryEnabled"/ { print "  \"ask\": ["; print "    \"Skill(plugin-manage)\""; print "  ]," }' \
+    "$SANDBOX/.claude/settings.json" > "$BATS_TEST_TMPDIR/s"
+  mv "$BATS_TEST_TMPDIR/s" "$SANDBOX/.claude/settings.json"
+  run "$SCRIPT" remove demo
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "ask": ['
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "Skill(plugin-manage)"'
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING ]'
+  # apply does lose them: that is what the plan warns about.
+  "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo >/dev/null 2>&1
+  ! grep -qF 'gh pr review' "$SANDBOX/.claude/settings.json"
+}
+
 @test "apply add --ref installs a tag and records it" {
   git_q -C "$ORIGIN" tag v0.1.0
   edit_conf 's/^version=.*/version=0.2.0/'

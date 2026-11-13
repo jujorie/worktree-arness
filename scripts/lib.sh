@@ -88,24 +88,29 @@ plugin_allow_claude() {
   done
 }
 
-# render <src> <dest>: write src (relative to ARNESS_ROOT) to dest, replacing
-# {{$ARNESS_ROOT}} with the absolute repo path, and a line holding {{$PLUGIN_ALLOW}}
-# with one "<rule>", line per plugin rule at its indentation (no line when there are
-# none). Regenerated on every run; when the content changes, the previous dest is saved
-# as <dest>.bak, replacing any older .bak (each plugin add, update or remove does it).
-render() {
-  local src="$ARNESS_ROOT/$1" dest="$ARNESS_ROOT/$2" tmp esc rules
+# render_text <src> <rules>: print src (relative to ARNESS_ROOT) with {{$ARNESS_ROOT}} replaced by
+# the absolute repo path, and a line holding {{$PLUGIN_ALLOW}} replaced by one "<rule>", line per
+# rule of <rules> (one per line) at its indentation (no line when there are none). Writes nothing.
+render_text() {
+  local esc
   esc=$(printf '%s' "$ARNESS_ROOT" | sed -e 's/[\\&|]/\\&/g')
-  rules="$(plugin_allow_claude)"
-  tmp=$(mktemp)
-  sed "s|{{\$ARNESS_ROOT}}|$esc|g" "$src" | RULES="$rules" awk -v mark='{{$PLUGIN_ALLOW}}' '
+  sed "s|{{\$ARNESS_ROOT}}|$esc|g" "$ARNESS_ROOT/$1" | RULES="$2" awk -v mark='{{$PLUGIN_ALLOW}}' '
     index($0, mark) {
       ind = substr($0, 1, index($0, mark) - 1)
       n = split(ENVIRON["RULES"], r, "\n")
       for (i = 1; i <= n; i++) if (r[i] != "") print ind "\"" r[i] "\","
       next
     }
-    { print }' > "$tmp"
+    { print }'
+}
+
+# render <src> <dest>: write render_text of src, with the rules of the installed plugins, to dest
+# (relative to ARNESS_ROOT). Regenerated on every run; when the content changes, the previous dest
+# is saved as <dest>.bak, replacing any older .bak (each plugin add, update or remove does it).
+render() {
+  local dest="$ARNESS_ROOT/$2" tmp
+  tmp=$(mktemp)
+  render_text "$1" "$(plugin_allow_claude)" > "$tmp"
   mkdir -p "$(dirname "$dest")"
   if [ -f "$dest" ] && ! cmp -s "$tmp" "$dest"; then
     cp "$dest" "$dest.bak"
