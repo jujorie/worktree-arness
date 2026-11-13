@@ -33,7 +33,7 @@ What it does:
 | `NOT_FOUND <path>` | 4 | The worktree does not exist. Suggest `worktree-create`, or check the slug. |
 | `INSTALL_FAILED <code> <log>` | 7 | Files are copied but `install.sh` failed. The last 20 lines of its output are on stderr; the full log is at `<log>` (read it only if needed). |
 | `SKIPPED <file> <reason>` | 13 | Some files were not copied (symlink, reserved `.git`, conflict). Report each. |
-| error on stderr | 2 | Invalid slug. Show the message. |
+| error on stderr | 2 | Invalid slug, or (Git Bash) `cygpath cannot convert` the worktree path. Show the message. |
 
 ## Ignore file
 
