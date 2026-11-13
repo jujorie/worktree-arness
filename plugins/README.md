@@ -65,7 +65,7 @@ allow.opencode=my-tool *
 | `requires` | no | System commands that must be installed; checked, never installed |
 | `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet; after `install` all of them must |
 | `install` / `uninstall` | no | Command run in the plugin folder after add or update / before remove. No time limit |
-| `allow.claude` | no, repeatable | Claude Code rule, rendered into `.claude/settings.json` together with `Skill(<n>)` for each skill |
+| `allow.claude` | no, repeatable | Claude Code rule, rendered into `.claude/settings.json` together with `Skill(<n>)` for each skill. That file is generated: every `apply` renders it again from `providers/claude/settings.json` and the plugin rules, so a line added there by hand is lost (the plan lists it as `DROPPED_SETTING`). Your own rules go in `.claude/settings.local.json` |
 | `allow.opencode` | no, repeatable | OpenCode bash rule; printed for you to add to `opencode.json`, which setup never edits |
 
 ### Permission rules
