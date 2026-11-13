@@ -305,7 +305,7 @@ print_plan() {
   if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
   if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
   check_opencode_gate
-  print_dropped "$(claude_rules)"
+  print_dropped
 }
 
 print_manual() {
@@ -393,21 +393,19 @@ unlink_plugin() {
 # settings_lines: each line of a settings file trimmed and without its trailing comma; blank ones dropped.
 settings_lines() { awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]*,?[ \t]*$/, ""); if ($0 != "") print }'; }
 
-# Lines of the Claude Code settings that neither the template nor any plugin rule produces: edits made
-# by hand to the generated file, which every apply loses when it renders it again (the .bak that keeps
-# them is replaced by the next render). Compared trimmed and without a trailing comma, so indentation
-# and the last item of a list do not count. Prints one DROPPED_SETTING line each; what belongs to the
-# user goes in .claude/settings.local.json, which is never rendered.
-# print_dropped [<plan-rules>]: the Claude rules of the plugin in the plan, one per line (none to remove).
+# Lines of the Claude Code settings added by hand to the generated file, which every apply loses when
+# it renders it again (the .bak that keeps them is replaced by the next render): a diff against what
+# the template and the installed plugins' rules render today, so position counts and a template rule
+# moved into another block (e.g. a hand-made "ask": [ ... ]) is listed with it. Compared trimmed and
+# without a trailing comma, so indentation and the last item of a list do not count. Prints one
+# DROPPED_SETTING line each; what belongs to the user goes in .claude/settings.local.json, which is
+# never rendered. Lines removed by hand are not listed: the render brings them back.
 print_dropped() {
-  local dest="$ROOT/.claude/settings.json" plan="${1:-}" known line
+  local dest="$ROOT/.claude/settings.json"
   [ -f "$dest" ] || return 0
-  known="$({ render_text providers/claude/settings.json ""
-             { plugin_allow_claude; printf '%s\n' "$plan"; } | awk 'NF { print "\"" $0 "\"" }'
-           } | settings_lines)"
-  settings_lines < "$dest" | while IFS= read -r line; do
-    if ! printf '%s\n' "$known" | grep -qxF -- "$line"; then echo "DROPPED_SETTING $line"; fi
-  done
+  # diff exits 1 when the files differ: that is the case to report, not an error.
+  { diff <(render_text providers/claude/settings.json "$(plugin_allow_claude)" | settings_lines) \
+      <(settings_lines < "$dest") || true; } | sed -n 's/^> /DROPPED_SETTING /p'
 }
 
 # Re-render the Claude Code settings when that provider is set up, so plugin rules follow the plugins.

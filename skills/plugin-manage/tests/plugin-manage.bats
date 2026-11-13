@@ -173,6 +173,14 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   run "$SCRIPT" update demo
   [ "$status" -eq 20 ]
   [ "$(printf '%s\n' "$output" | grep -c '^DROPPED_SETTING')" -eq 3 ]
+  # A template rule moved by hand into a new block is listed with the block, not only its opening line.
+  awk '{ print } /"autoMemoryEnabled"/ { print "  \"ask\": ["; print "    \"Skill(plugin-manage)\""; print "  ]," }' \
+    "$SANDBOX/.claude/settings.json" > "$BATS_TEST_TMPDIR/s"
+  mv "$BATS_TEST_TMPDIR/s" "$SANDBOX/.claude/settings.json"
+  run "$SCRIPT" remove demo
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "ask": ['
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "Skill(plugin-manage)"'
+  printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING ]'
   # apply does lose them: that is what the plan warns about.
   "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo >/dev/null 2>&1
   ! grep -qF 'gh pr review' "$SANDBOX/.claude/settings.json"
