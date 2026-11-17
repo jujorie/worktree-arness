@@ -616,6 +616,50 @@ wait_code() {
   [ -z "$(group_pids "$pid")" ]
 }
 
+# signal_wrapper_only <signal>: start serve, send <signal> to the saved pid only (the wrapper, not its
+# group), and check that the wrapper passed it on to npm, saved the code and reported it to wait.
+signal_wrapper_only() {
+  "$SCRIPT" run serve >/dev/null
+  pid="$(cat "$(state a/feat/x)/serve.pid")"
+  sleep 0.5
+  kill "-$1" "$pid"
+  run "$SCRIPT" wait serve --timeout 10
+  # Whatever the script left in the group must not outlive the test.
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  [ "$status" -eq 8 ]
+  [[ "${lines[0]}" == "FINISHED a/feat/x serve "* ]] || false
+  code="$(cat "$(state a/feat/x)/serve.code")"
+  [ "$code" -ne 0 ]
+  [ "${lines[0]}" = "FINISHED a/feat/x serve $code $(state a/feat/x)/serve.log" ]
+  run kill -0 "$pid"
+  [ "$status" -ne 0 ]
+}
+
+@test "a TERM to the wrapper alone reaches npm, and its code is saved" {
+  signal_wrapper_only TERM
+}
+
+@test "an INT to the wrapper alone reaches npm, and its code is saved" {
+  signal_wrapper_only INT
+}
+
+@test "stop also removes a .code.tmp left behind" {
+  "$SCRIPT" run serve >/dev/null
+  echo 0 > "$(state a/feat/x)/serve.code.tmp"
+  run "$SCRIPT" stop --worktree a/feat/x serve
+  [ "$status" -eq 0 ]
+  [ ! -e "$(state a/feat/x)/serve.code.tmp" ]
+}
+
+@test "a new run removes the old code also when it stops before running" {
+  run "$SCRIPT" run fail
+  [ -f "$(state a/feat/x)/fail.code" ]
+  rmdir "$(WT a/feat/x)/node_modules"
+  run "$SCRIPT" run fail
+  [ "$status" -eq 11 ]
+  [ ! -e "$(state a/feat/x)/fail.code" ]
+}
+
 @test "a TERM from outside npm-run still saves the exit code" {
   "$SCRIPT" run serve >/dev/null
   pid="$(cat "$(state a/feat/x)/serve.pid")"

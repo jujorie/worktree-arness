@@ -20,6 +20,8 @@
 # wrapper passes TERM and INT on to npm and lives until npm ends, so the saved pid runs as long
 # as npm does. stop sends TERM to the group, waits up to 5 s for the wrapper, then KILL to the group; it
 # removes the .code the wrapper saved, so a stopped script leaves none.
+# Known limit, only where nobody reaps zombies (a container without an init): if npm dies by KILL and leaves
+# a child alive, the wrapper exits and stop no longer sees that child. Run there with an init (tini, docker run --init).
 # wait polls every second until <script>.code appears; default --timeout 540 s (under the 10 min an agent's
 # shell tool allows; 0 waits forever). On TIMEOUT the script keeps running: call wait again.
 # With an .nvmrc at the worktree root, install and run use that node version from nvm (NVM_DIR, else ~/.nvm or
@@ -366,6 +368,9 @@ cmd_run() {
     echo "ALREADY_RUNNING $SLUG $script $pid"
     exit "$EXIT_RUNNING"
   fi
+  # The code of an earlier run would make wait answer at once with an old result: gone before any stop
+  # below (NO_NODE_VERSION, CONFIRM_INSTALL, INSTALL_FAILED) as well.
+  rm -f "$code_file" "$code_file.tmp"
   no_node_version
 
   if [ ! -d "$WT/node_modules" ]; then
@@ -382,8 +387,6 @@ cmd_run() {
   fi
 
   mkdir -p "$STATE"
-  # The code of an earlier run would make wait answer at once with an old result.
-  rm -f "$code_file" "$code_file.tmp"
   # Job control gives the job its own process group (pgid = pid), so stop can end the whole tree.
   set -m
   if [ "${#args[@]}" -gt 0 ]; then
