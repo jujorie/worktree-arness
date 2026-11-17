@@ -597,6 +597,25 @@ wait_code() {
   [ ! -e "$(state a/feat/x)/stubborn.code" ]
 }
 
+@test "a running script with defunct in its worktree, name or args is RUNNING, waited and stopped" {
+  mk_wt a fix-defunct
+  (cd "$(WT a/fix-defunct)" && npm pkg set "scripts.defunct=sleep 30; true" >/dev/null)
+  run "$SCRIPT" run --worktree a/fix-defunct defunct -- --grep defunct
+  [[ "$output" == "STARTED a/fix-defunct defunct "* ]]
+  pid="$(cat "$(state a/fix-defunct)/defunct.pid")"
+  run "$SCRIPT" ps
+  [ "$output" = "RUNNING a/fix-defunct defunct $pid $(state a/fix-defunct)/defunct.log" ]
+  run "$SCRIPT" run --worktree a/fix-defunct defunct
+  [ "$status" -eq 9 ]
+  run "$SCRIPT" wait --worktree a/fix-defunct defunct --timeout 1
+  [ "$status" -eq 15 ]
+  [ "$output" = "TIMEOUT a/fix-defunct defunct $pid $(state a/fix-defunct)/defunct.log" ]
+  run "$SCRIPT" stop --worktree a/fix-defunct defunct
+  [ "$output" = "STOPPED a/fix-defunct defunct $pid" ]
+  sleep 0.3
+  [ -z "$(group_pids "$pid")" ]
+}
+
 @test "a TERM from outside npm-run still saves the exit code" {
   "$SCRIPT" run serve >/dev/null
   pid="$(cat "$(state a/feat/x)/serve.pid")"

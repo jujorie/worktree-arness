@@ -192,12 +192,13 @@ valid_pid() {
 }
 
 # pid_alive <pid>: 0 if that process runs and is a leader we started: the wrapper, whose command line has
-# "npm run" (it lives as long as npm). A pid reused by another process, or a wrapper left as a zombie
-# ([bash] <defunct>, after npm ended), is not.
+# "npm run" (it lives as long as npm). A pid reused by another process is not. Neither is a wrapper left
+# as a zombie after npm ended: ps prints no arguments for it ([bash] <defunct>), so no npm. Never match
+# other words of the command line: it holds the worktree, the script and its arguments, whatever they are.
 pid_alive() {
   valid_pid "$1" || return 1
   kill -0 "$1" 2>/dev/null || return 1
-  case "$(proc_args "$1")" in *defunct*) return 1 ;; *npm*) return 0 ;; esac
+  case "$(proc_args "$1")" in *npm*) return 0 ;; esac
   return 1
 }
 
