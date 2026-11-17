@@ -624,15 +624,20 @@ signal_wrapper_only() {
   sleep 0.5
   kill "-$1" "$pid"
   run "$SCRIPT" wait serve --timeout 10
+  # The wrapper ended by itself (it exits right after saving the code); checked before the cleanup KILL.
+  wrapper_alive=1
+  for _ in $(seq 20); do
+    if ! kill -0 "$pid" 2>/dev/null; then wrapper_alive=0; break; fi
+    sleep 0.1
+  done
   # Whatever the script left in the group must not outlive the test.
   kill -KILL -- "-$pid" 2>/dev/null || true
+  [ "$wrapper_alive" -eq 0 ]
   [ "$status" -eq 8 ]
   [[ "${lines[0]}" == "FINISHED a/feat/x serve "* ]] || false
   code="$(cat "$(state a/feat/x)/serve.code")"
   [ "$code" -ne 0 ]
   [ "${lines[0]}" = "FINISHED a/feat/x serve $code $(state a/feat/x)/serve.log" ]
-  run kill -0 "$pid"
-  [ "$status" -ne 0 ]
 }
 
 @test "a TERM to the wrapper alone reaches npm, and its code is saved" {
@@ -644,11 +649,46 @@ signal_wrapper_only() {
 }
 
 @test "stop also removes a .code.tmp left behind" {
-  "$SCRIPT" run serve >/dev/null
+  # Its wrapper is gone (a dead pid): nothing rewrites or renames the .code.tmp, only forget can remove it.
+  mkdir -p "$(state a/feat/x)"
+  dead_pid > "$(state a/feat/x)/serve.pid"
   echo 0 > "$(state a/feat/x)/serve.code.tmp"
   run "$SCRIPT" stop --worktree a/feat/x serve
   [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
   [ ! -e "$(state a/feat/x)/serve.code.tmp" ]
+}
+
+@test "a run that stops early without npm also removes the old code" {
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v20.19.0/bin" 20.19.0
+  no_node_path
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  mkdir -p "$(state a/feat/x)"
+  echo 3 > "$(state a/feat/x)/ver.code"
+  echo 3 > "$(state a/feat/x)/../x-other.code"
+  PATH="$NO_NODE_PATH" run "$SCRIPT" run ver
+  [ "$status" -eq 13 ]
+  [ "$output" = "NO_NODE_VERSION a/feat/x 99.1" ]
+  [ ! -e "$(state a/feat/x)/ver.code" ]
+  # An invalid script name never reaches rm.
+  PATH="$NO_NODE_PATH" run "$SCRIPT" run ../x-other
+  [ "$status" -eq 13 ]
+  [ -f "$(state a/feat/x)/../x-other.code" ]
+}
+
+@test "a run that stops early without npm keeps the code of a script that still runs" {
+  "$SCRIPT" run serve >/dev/null
+  echo 0 > "$(state a/feat/x)/serve.code"
+  nvmrc_setup
+  export NVM_DIR="$TMP/nvm"
+  fake_node "$NVM_DIR/versions/node/v20.19.0/bin" 20.19.0
+  no_node_path
+  echo 99.1 > "$(WT a/feat/x)/.nvmrc"
+  PATH="$NO_NODE_PATH" run "$SCRIPT" run serve
+  [ "$status" -eq 13 ]
+  [ -f "$(state a/feat/x)/serve.code" ]
 }
 
 @test "a new run removes the old code also when it stops before running" {

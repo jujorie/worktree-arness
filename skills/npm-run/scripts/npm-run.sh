@@ -20,8 +20,8 @@
 # wrapper passes TERM and INT on to npm and lives until npm ends, so the saved pid runs as long
 # as npm does. stop sends TERM to the group, waits up to 5 s for the wrapper, then KILL to the group; it
 # removes the .code the wrapper saved, so a stopped script leaves none.
-# Known limit, only where nobody reaps zombies (a container without an init): if npm dies by KILL and leaves
-# a child alive, the wrapper exits and stop no longer sees that child. Run there with an init (tini, docker run --init).
+# Known limit: if npm dies by KILL and leaves a child alive, stop does not see that child (as before with an
+# init; without one, where the npm leader stayed a zombie, stop used to end it).
 # wait polls every second until <script>.code appears; default --timeout 540 s (under the 10 min an agent's
 # shell tool allows; 0 waits forever). On TIMEOUT the script keeps running: call wait again.
 # With an .nvmrc at the worktree root, install and run use that node version from nvm (NVM_DIR, else ~/.nvm or
@@ -326,6 +326,16 @@ use_nvmrc() {
 }
 
 # no_node_version: stop with NO_NODE_VERSION when use_nvmrc found that nvm lacks the .nvmrc version.
+# clear_old_code <script>: remove the code an earlier run of <script> saved, which would make wait answer at
+# once with an old result. Only for a valid script name (it becomes a file name) that does not run now: the
+# code of a running script is its own, saved when it ends.
+clear_old_code() {
+  local pid_file="$STATE/$1.pid"
+  validate_script "$1" || return 0
+  if [ -f "$pid_file" ] && pid_alive "$(read_pid "$pid_file")"; then return 0; fi
+  rm -f "$STATE/$1.code" "$STATE/$1.code.tmp"
+}
+
 no_node_version() {
   [ -n "$NODE_MISSING" ] || return 0
   echo "NO_NODE_VERSION $SLUG $NODE_MISSING"
@@ -349,7 +359,10 @@ cmd_run() {
   # reported after the script checks (listing the scripts needs no node version) and before the install
   # question; first only when there is no npm to read the scripts with.
   use_nvmrc
-  if ! command -v npm >/dev/null 2>&1; then no_node_version; fi
+  if ! command -v npm >/dev/null 2>&1; then
+    if [ -n "$script" ]; then clear_old_code "$script"; fi
+    no_node_version
+  fi
   need_npm
   read_scripts
   if [ -z "$script" ]; then
@@ -368,9 +381,8 @@ cmd_run() {
     echo "ALREADY_RUNNING $SLUG $script $pid"
     exit "$EXIT_RUNNING"
   fi
-  # The code of an earlier run would make wait answer at once with an old result: gone before any stop
-  # below (NO_NODE_VERSION, CONFIRM_INSTALL, INSTALL_FAILED) as well.
-  rm -f "$code_file" "$code_file.tmp"
+  # Before any stop below (NO_NODE_VERSION, CONFIRM_INSTALL, INSTALL_FAILED) as well.
+  clear_old_code "$script"
   no_node_version
 
   if [ ! -d "$WT/node_modules" ]; then
