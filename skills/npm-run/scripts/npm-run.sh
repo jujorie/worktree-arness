@@ -20,8 +20,8 @@
 # wrapper passes TERM and INT on to npm and lives until npm ends, so the saved pid runs as long
 # as npm does. stop sends TERM to the group, waits up to 5 s for the wrapper, then KILL to the group; it
 # removes the .code the wrapper saved, so a stopped script leaves none.
-# Known limit: if npm dies by KILL and leaves a child alive, stop does not see that child (as before with an
-# init; without one, where the npm leader stayed a zombie, stop used to end it).
+# Known limit: if npm dies by KILL and leaves a child alive, the wrapper exits and stop no longer sees that
+# child; end it by hand with `kill -- -<pid>` (the pid STARTED printed).
 # wait polls every second until <script>.code appears; default --timeout 540 s (under the 10 min an agent's
 # shell tool allows; 0 waits forever). On TIMEOUT the script keeps running: call wait again.
 # With an .nvmrc at the worktree root, install and run use that node version from nvm (NVM_DIR, else ~/.nvm or
@@ -325,7 +325,6 @@ use_nvmrc() {
   NODE_MISSING="$want"
 }
 
-# no_node_version: stop with NO_NODE_VERSION when use_nvmrc found that nvm lacks the .nvmrc version.
 # clear_old_code <script>: remove the code an earlier run of <script> saved, which would make wait answer at
 # once with an old result. Only for a valid script name (it becomes a file name) that does not run now: the
 # code of a running script is its own, saved when it ends.
@@ -336,6 +335,7 @@ clear_old_code() {
   rm -f "$STATE/$1.code" "$STATE/$1.code.tmp"
 }
 
+# no_node_version: stop with NO_NODE_VERSION when use_nvmrc found that nvm lacks the .nvmrc version.
 no_node_version() {
   [ -n "$NODE_MISSING" ] || return 0
   echo "NO_NODE_VERSION $SLUG $NODE_MISSING"

@@ -66,7 +66,7 @@ Give the shell tool a timeout longer than `--timeout` (default 540 s, under the 
 
 The code is saved in `tmp/npm-run/<repo>/<name>/<script>.code` when the script ends, also after npm-run returned. A new `run` of that script removes the old one first. The pid saved is a wrapper that passes TERM and INT on to npm and lives as long as npm, so a TERM from outside npm-run still saves a code. A script ended with `stop` leaves no code (`stop` removes it with the pid and log), so `wait` then says `NOT_STARTED`.
 
-Known limit: if npm dies by KILL and leaves a child alive, `stop` does not see that child (as before with an init; without one, where the npm leader stayed a zombie, `stop` used to end it).
+Known limit: if npm dies by KILL and leaves a child alive, the wrapper exits and `stop` no longer sees that child; end it by hand with `kill -- -<pid>` (the pid STARTED printed).
 
 ### List, stop and clean up
 
