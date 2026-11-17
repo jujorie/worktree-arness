@@ -401,7 +401,7 @@ EOF
   echo "$(dead_pid)" > "$(state a/feat/x)/serve.pid"
   echo "it died" > "$(state a/feat/x)/serve.log"
   run "$SCRIPT" ps
-  [[ "$output" == "EXITED "* ]]
+  [[ "$output" == "EXITED "* ]] || false
   [ -f "$(state a/feat/x)/serve.log" ]
   run "$SCRIPT" clean
   [ "$output" = "CLEANED a/feat/x serve.log" ]
@@ -415,8 +415,8 @@ EOF
   echo "$(dead_pid)" > "$(state a/feat/x)/gone.pid"
   run "$SCRIPT" clean
   [ "$status" -eq 0 ]
-  [[ "$output" == *"CLEANED a/feat/x gone.pid"* ]]
-  [[ "$output" == *"CLEANED a/feat/x ok.log"* ]]
+  [[ "$output" == *"CLEANED a/feat/x gone.pid"* ]] || false
+  [[ "$output" == *"CLEANED a/feat/x ok.log"* ]] || false
   [ -f "$(state a/feat/x)/serve.pid" ]
   [ -f "$(state a/feat/x)/serve.log" ]
   [ -f "$(state a/feat/x)/install.log" ]
@@ -458,7 +458,7 @@ add_script() {
   add_script slow "sleep 2 && echo slow-done"
   NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
   [ "$status" -eq 0 ]
-  [[ "$output" == "STARTED a/feat/x slow "* ]]
+  [[ "$output" == "STARTED a/feat/x slow "* ]] || false
   run "$SCRIPT" wait --worktree a/feat/x slow
   [ "$status" -eq 0 ]
   [ "$output" = "FINISHED a/feat/x slow 0 $(state a/feat/x)/slow.log" ]
@@ -468,12 +468,12 @@ add_script() {
 @test "wait on a slow script that fails gives FINISHED with its code, exit 8 and the log tail" {
   add_script slowfail "sleep 2 && echo slow-boom && exit 3"
   NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slowfail
-  [[ "$output" == "STARTED a/feat/x slowfail "* ]]
+  [[ "$output" == "STARTED a/feat/x slowfail "* ]] || false
   run "$SCRIPT" wait --worktree a/feat/x slowfail
   [ "$status" -eq 8 ]
   [ "${lines[0]}" = "FINISHED a/feat/x slowfail 3 $(state a/feat/x)/slowfail.log" ]
-  [[ "$output" == *"--- last 20 lines of $(state a/feat/x)/slowfail.log ---"* ]]
-  [[ "$output" == *slow-boom* ]]
+  [[ "$output" == *"--- last 20 lines of $(state a/feat/x)/slowfail.log ---"* ]] || false
+  [[ "$output" == *slow-boom* ]] || false
 }
 
 @test "wait on a script that already ended answers at once with its code" {
@@ -523,7 +523,7 @@ add_script() {
 @test "the exit code is saved after npm-run returned, and ps shows it in EXITED" {
   add_script slowfail "sleep 2 && exit 3"
   NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slowfail
-  [[ "$output" == "STARTED a/feat/x slowfail "* ]]
+  [[ "$output" == "STARTED a/feat/x slowfail "* ]] || false
   pid="$(cat "$(state a/feat/x)/slowfail.pid")"
   for _ in $(seq 100); do
     if [ -f "$(state a/feat/x)/slowfail.code" ]; then break; fi
@@ -540,7 +540,7 @@ add_script() {
   [ -f "$(state a/feat/x)/fail.code" ]
   add_script fail "sleep 30"
   run "$SCRIPT" run fail
-  [[ "$output" == "STARTED a/feat/x fail "* ]]
+  [[ "$output" == "STARTED a/feat/x fail "* ]] || false
   [ ! -e "$(state a/feat/x)/fail.code" ]
 }
 
@@ -549,7 +549,7 @@ add_script() {
   [ -f "$(state a/feat/x)/fail.code" ]
   run "$SCRIPT" clean
   [ "$status" -eq 0 ]
-  [[ "$output" == *"CLEANED a/feat/x fail.code"* ]]
+  [[ "$output" == *"CLEANED a/feat/x fail.code"* ]] || false
   [ ! -e "$ARNESS_ROOT/tmp/npm-run" ]
 }
 
@@ -601,7 +601,7 @@ wait_code() {
   mk_wt a fix-defunct
   (cd "$(WT a/fix-defunct)" && npm pkg set "scripts.defunct=sleep 30; true" >/dev/null)
   run "$SCRIPT" run --worktree a/fix-defunct defunct -- --grep defunct
-  [[ "$output" == "STARTED a/fix-defunct defunct "* ]]
+  [[ "$output" == "STARTED a/fix-defunct defunct "* ]] || false
   pid="$(cat "$(state a/fix-defunct)/defunct.pid")"
   run "$SCRIPT" ps
   [ "$output" = "RUNNING a/fix-defunct defunct $pid $(state a/fix-defunct)/defunct.log" ]
@@ -623,7 +623,7 @@ wait_code() {
   kill -TERM -- "-$pid"
   run "$SCRIPT" wait serve --timeout 10
   [ "$status" -eq 8 ]
-  [[ "${lines[0]}" == "FINISHED a/feat/x serve "* ]]
+  [[ "${lines[0]}" == "FINISHED a/feat/x serve "* ]] || false
   [ "$(cat "$(state a/feat/x)/serve.code")" -ne 0 ]
 }
 
@@ -688,7 +688,7 @@ wait_code() {
   [ "$output" = "NO_CODE a/feat/x serve $(state a/feat/x)/serve.log" ]
   run "$SCRIPT" ps
   [ "$status" -eq 0 ]
-  [[ "$output" == "EXITED a/feat/x serve "* ]]
+  [[ "$output" == "EXITED a/feat/x serve "* ]] || false
   echo "$(dead_pid)" > "$(state a/feat/x)/other.pid"
   chmod 000 "$(state a/feat/x)/other.pid"
   run "$SCRIPT" stop --all
@@ -699,7 +699,7 @@ wait_code() {
 @test "stop of a script that ended by itself also removes its code" {
   add_script slow "sleep 2"
   NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
-  [[ "$output" == "STARTED a/feat/x slow "* ]]
+  [[ "$output" == "STARTED a/feat/x slow "* ]] || false
   wait_code slow
   run "$SCRIPT" stop --worktree a/feat/x slow
   [ "$status" -eq 0 ]
@@ -716,7 +716,7 @@ wait_code() {
 @test "wait --timeout 0 waits with no limit" {
   add_script slow "sleep 2"
   NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
-  [[ "$output" == "STARTED a/feat/x slow "* ]]
+  [[ "$output" == "STARTED a/feat/x slow "* ]] || false
   run "$SCRIPT" wait slow --timeout 0
   [ "$status" -eq 0 ]
   [ "$output" = "FINISHED a/feat/x slow 0 $(state a/feat/x)/slow.log" ]
@@ -733,12 +733,12 @@ wait_code() {
   [ "$status" -eq 2 ]
   run "$SCRIPT" -h
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Exit codes:"* ]]
-  [[ "$output" == *"14 stop failed"* ]]
-  [[ "$output" == *"15 wait timed out"* ]]
-  [[ "$output" == *"npm-run.sh wait "* ]]
-  [[ "$output" != *"set -euo"* ]]
-  [[ "$output" == *"13 node version of .nvmrc not installed"* ]]
+  [[ "$output" == *"Exit codes:"* ]] || false
+  [[ "$output" == *"14 stop failed"* ]] || false
+  [[ "$output" == *"15 wait timed out"* ]] || false
+  [[ "$output" == *"npm-run.sh wait "* ]] || false
+  [[ "$output" != *"set -euo"* ]] || false
+  [[ "$output" == *"13 node version of .nvmrc not installed"* ]] || false
 }
 
 # --- .nvmrc ------------------------------------------------------------------------
