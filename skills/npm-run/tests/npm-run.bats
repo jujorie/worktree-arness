@@ -377,9 +377,12 @@ EOF
   run "$SCRIPT" run ok
   [ "$status" -eq 0 ]
   [ -f "$(state a/feat/x)/ok.log" ]
+  [ "$(cat "$(state a/feat/x)/ok.code")" = 0 ]
   run "$SCRIPT" clean
   [ "$status" -eq 0 ]
-  [ "$output" = "CLEANED a/feat/x ok.log" ]
+  [ "${lines[0]}" = "CLEANED a/feat/x ok.code" ]
+  [ "${lines[1]}" = "CLEANED a/feat/x ok.log" ]
+  [ "${#lines[@]}" -eq 2 ]
   [ ! -e "$ARNESS_ROOT/tmp/npm-run" ]
 }
 
@@ -434,6 +437,126 @@ EOF
   [ "$status" -eq 2 ]
 }
 
+# --- wait and exit codes -------------------------------------------------------------
+
+# add_script <name> <command>: add a script to the worktree's package.json.
+add_script() {
+  (cd "$(WT a/feat/x)" && npm pkg set "scripts.$1=$2" >/dev/null)
+}
+
+@test "wait blocks until a slow script ends with 0: FINISHED 0, exit 0" {
+  add_script slow "sleep 2 && echo slow-done"
+  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
+  [ "$status" -eq 0 ]
+  [[ "$output" == "STARTED a/feat/x slow "* ]]
+  run "$SCRIPT" wait --worktree a/feat/x slow
+  [ "$status" -eq 0 ]
+  [ "$output" = "FINISHED a/feat/x slow 0 $(state a/feat/x)/slow.log" ]
+  grep -q slow-done "$(state a/feat/x)/slow.log"
+}
+
+@test "wait on a slow script that fails gives FINISHED with its code, exit 8 and the log tail" {
+  add_script slowfail "sleep 2 && echo slow-boom && exit 3"
+  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slowfail
+  [[ "$output" == "STARTED a/feat/x slowfail "* ]]
+  run "$SCRIPT" wait --worktree a/feat/x slowfail
+  [ "$status" -eq 8 ]
+  [ "${lines[0]}" = "FINISHED a/feat/x slowfail 3 $(state a/feat/x)/slowfail.log" ]
+  [[ "$output" == *"--- last 20 lines of $(state a/feat/x)/slowfail.log ---"* ]]
+  [[ "$output" == *slow-boom* ]]
+}
+
+@test "wait on a script that already ended answers at once with its code" {
+  run "$SCRIPT" run fail
+  [ "$status" -eq 8 ]
+  start="$(date +%s)"
+  run "$SCRIPT" wait fail
+  [ "$status" -eq 8 ]
+  [ "${lines[0]}" = "FINISHED a/feat/x fail 3 $(state a/feat/x)/fail.log" ]
+  [ "$(( $(date +%s) - start ))" -le 1 ]
+}
+
+@test "wait --timeout gives TIMEOUT and leaves the script running" {
+  "$SCRIPT" run serve >/dev/null
+  pid="$(cat "$(state a/feat/x)/serve.pid")"
+  run "$SCRIPT" wait --worktree a/feat/x serve --timeout 1
+  [ "$status" -eq 15 ]
+  [ "$output" = "TIMEOUT a/feat/x serve $pid $(state a/feat/x)/serve.log" ]
+  kill -0 "$pid"
+  [ ! -e "$(state a/feat/x)/serve.code" ]
+}
+
+@test "wait on a script never started there is NOT_STARTED; bad input exits 2" {
+  run "$SCRIPT" wait --worktree a/feat/x serve
+  [ "$status" -eq 16 ]
+  [ "$output" = "NOT_STARTED a/feat/x serve" ]
+  run "$SCRIPT" wait --worktree a/nope serve
+  [ "$status" -eq 4 ]
+  [ "$output" = "NOT_FOUND a/nope" ]
+  run "$SCRIPT" wait
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" wait serve --timeout x
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" wait ../serve
+  [ "$status" -eq 2 ]
+}
+
+@test "wait on a script that died without a code is NO_CODE" {
+  mkdir -p "$(state a/feat/x)"
+  echo 999999 > "$(state a/feat/x)/serve.pid"
+  echo "it died" > "$(state a/feat/x)/serve.log"
+  run "$SCRIPT" wait serve
+  [ "$status" -eq 17 ]
+  [ "$output" = "NO_CODE a/feat/x serve $(state a/feat/x)/serve.log" ]
+}
+
+@test "the exit code is saved after npm-run returned, and ps shows it in EXITED" {
+  add_script slowfail "sleep 2 && exit 3"
+  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slowfail
+  [[ "$output" == "STARTED a/feat/x slowfail "* ]]
+  pid="$(cat "$(state a/feat/x)/slowfail.pid")"
+  for _ in $(seq 100); do
+    if [ -f "$(state a/feat/x)/slowfail.code" ]; then break; fi
+    sleep 0.1
+  done
+  [ "$(cat "$(state a/feat/x)/slowfail.code")" = 3 ]
+  sleep 0.5
+  run "$SCRIPT" ps
+  [ "$output" = "EXITED a/feat/x slowfail $pid $(state a/feat/x)/slowfail.log 3" ]
+}
+
+@test "a new run of a script forgets the code of the previous one" {
+  run "$SCRIPT" run fail
+  [ -f "$(state a/feat/x)/fail.code" ]
+  add_script fail "sleep 30"
+  run "$SCRIPT" run fail
+  [[ "$output" == "STARTED a/feat/x fail "* ]]
+  [ ! -e "$(state a/feat/x)/fail.code" ]
+}
+
+@test "clean removes the exit code files of what no longer runs" {
+  run "$SCRIPT" run fail
+  [ -f "$(state a/feat/x)/fail.code" ]
+  run "$SCRIPT" clean
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLEANED a/feat/x fail.code"* ]]
+  [ ! -e "$ARNESS_ROOT/tmp/npm-run" ]
+}
+
+@test "stop leaves no exit code behind, and wait then says NOT_STARTED" {
+  "$SCRIPT" run serve >/dev/null
+  pid="$(cat "$(state a/feat/x)/serve.pid")"
+  run "$SCRIPT" stop --worktree a/feat/x serve
+  [ "$status" -eq 0 ]
+  [ "$output" = "STOPPED a/feat/x serve $pid" ]
+  sleep 0.5
+  [ ! -e "$(state a/feat/x)/serve.code" ]
+  [ ! -e "$(state a/feat/x)/serve.code.tmp" ]
+  run "$SCRIPT" wait serve
+  [ "$status" -eq 16 ]
+  [ "$output" = "NOT_STARTED a/feat/x serve" ]
+}
+
 # --- usage ---------------------------------------------------------------------------
 
 @test "invalid usage exits 2; -h prints the header" {
@@ -447,6 +570,8 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"Exit codes:"* ]]
   [[ "$output" == *"14 stop failed"* ]]
+  [[ "$output" == *"15 wait timed out"* ]]
+  [[ "$output" == *"npm-run.sh wait "* ]]
   [[ "$output" != *"set -euo"* ]]
   [[ "$output" == *"13 node version of .nvmrc not installed"* ]]
 }
