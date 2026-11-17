@@ -557,6 +557,122 @@ add_script() {
   [ "$output" = "NOT_STARTED a/feat/x serve" ]
 }
 
+@test "stop kills a child that ignores TERM" {
+  add_script stubborn "trap '' TERM; sleep 30"
+  "$SCRIPT" run stubborn >/dev/null
+  pid="$(cat "$(state a/feat/x)/stubborn.pid")"
+  sleep 0.5
+  [ -n "$(group_pids "$pid")" ]
+  run "$SCRIPT" stop --worktree a/feat/x stubborn
+  [ "$status" -eq 0 ]
+  [ "$output" = "STOPPED a/feat/x stubborn $pid" ]
+  sleep 0.3
+  [ -z "$(group_pids "$pid")" ]
+}
+
+# wait_code <script>: wait up to 10 s for the wrapper to save that script's code, then for it to be gone.
+wait_code() {
+  for _ in $(seq 100); do
+    if [ -f "$(state a/feat/x)/$1.code" ]; then break; fi
+    sleep 0.1
+  done
+  sleep 0.5
+}
+
+@test "stop still ends what a STARTED script left running after npm ended" {
+  add_script bg "sleep 1; sleep 30 & echo bg-started"
+  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run bg
+  [[ "$output" == "STARTED a/feat/x bg "* ]]
+  pid="$(cat "$(state a/feat/x)/bg.pid")"
+  wait_code bg
+  [ -n "$(group_pids "$pid")" ]
+  run "$SCRIPT" ps
+  [ "$output" = "RUNNING a/feat/x bg $pid $(state a/feat/x)/bg.log" ]
+  run "$SCRIPT" stop --worktree a/feat/x bg
+  [ "$output" = "STOPPED a/feat/x bg $pid" ]
+  sleep 0.3
+  [ -z "$(group_pids "$pid")" ]
+}
+
+@test "a FINISHED script that left something running keeps its pid, so stop ends it" {
+  add_script bg "sleep 30 & echo bg-started"
+  run "$SCRIPT" run bg
+  [ "$status" -eq 0 ]
+  [[ "$output" == "FINISHED a/feat/x bg 0 "* ]]
+  [ -f "$(state a/feat/x)/bg.pid" ]
+  pid="$(cat "$(state a/feat/x)/bg.pid")"
+  [ -n "$(group_pids "$pid")" ]
+  run "$SCRIPT" stop --worktree a/feat/x bg
+  [ "$output" = "STOPPED a/feat/x bg $pid" ]
+  sleep 0.3
+  [ -z "$(group_pids "$pid")" ]
+}
+
+@test "the wrapper leaves no .code.tmp when it cannot save the code, and keeps npm's exit" {
+  mkdir -p "$TMP/fakebin"
+  printf '#!/bin/sh\nexit 3\n' > "$TMP/fakebin/npm"
+  printf '#!/bin/sh\nexit 1\n' > "$TMP/fakebin/mv"
+  chmod +x "$TMP/fakebin/npm" "$TMP/fakebin/mv"
+  run bash -c 'source "$1"; PATH="$2:$PATH" "$BASH" -c "$WRAPPER" npm-run "$3" x' _ "$SCRIPT" "$TMP/fakebin" "$TMP/x.code"
+  [ "$status" -eq 3 ]
+  [ ! -e "$TMP/x.code.tmp" ]
+  [ ! -e "$TMP/x.code" ]
+}
+
+@test "clean removes an orphan .code.tmp" {
+  mkdir -p "$(state a/feat/x)"
+  echo 0 > "$(state a/feat/x)/ok.code.tmp"
+  run "$SCRIPT" clean
+  [ "$status" -eq 0 ]
+  [ "$output" = "CLEANED a/feat/x ok.code.tmp" ]
+  [ ! -e "$ARNESS_ROOT/tmp/npm-run" ]
+}
+
+@test "wait, ps and stop do not crash on a pid file they cannot read" {
+  [ "$(id -u)" -ne 0 ] || skip "root reads any file"
+  mkdir -p "$(state a/feat/x)"
+  echo 999999 > "$(state a/feat/x)/serve.pid"
+  echo "it died" > "$(state a/feat/x)/serve.log"
+  chmod 000 "$(state a/feat/x)/serve.pid"
+  run "$SCRIPT" wait serve
+  [ "$status" -eq 17 ]
+  [ "$output" = "NO_CODE a/feat/x serve $(state a/feat/x)/serve.log" ]
+  run "$SCRIPT" ps
+  [ "$status" -eq 0 ]
+  [[ "$output" == "EXITED a/feat/x serve "* ]]
+  echo 999999 > "$(state a/feat/x)/other.pid"
+  chmod 000 "$(state a/feat/x)/other.pid"
+  run "$SCRIPT" stop --all
+  [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
+}
+
+@test "stop of a script that ended by itself also removes its code" {
+  add_script slow "sleep 2"
+  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
+  [[ "$output" == "STARTED a/feat/x slow "* ]]
+  wait_code slow
+  run "$SCRIPT" stop --worktree a/feat/x slow
+  [ "$status" -eq 0 ]
+  [ ! -e "$(state a/feat/x)/slow.code" ]
+}
+
+@test "clean keeps the .code of a script still running" {
+  "$SCRIPT" run serve >/dev/null
+  echo 0 > "$(state a/feat/x)/serve.code"
+  run "$SCRIPT" clean
+  [ -f "$(state a/feat/x)/serve.code" ]
+}
+
+@test "wait --timeout 0 waits with no limit" {
+  add_script slow "sleep 2"
+  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
+  [[ "$output" == "STARTED a/feat/x slow "* ]]
+  run "$SCRIPT" wait slow --timeout 0
+  [ "$status" -eq 0 ]
+  [ "$output" = "FINISHED a/feat/x slow 0 $(state a/feat/x)/slow.log" ]
+}
+
 # --- usage ---------------------------------------------------------------------------
 
 @test "invalid usage exits 2; -h prints the header" {

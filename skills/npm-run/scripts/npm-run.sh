@@ -18,6 +18,8 @@
 # A bash wrapper leads the process group (its pid is the one saved): it runs npm, then writes npm's exit
 # code to <script>.code, also after npm-run itself returned. A new run removes the old .code first. stop
 # kills the wrapper with the group, so a stopped script leaves no .code (stop also removes any it finds).
+# A script counts as running while anything of its group runs, also what it left behind (`cmd &`) after npm
+# ended, so ps lists it and stop ends it; stop waits for the whole group and sends KILL after 5 s.
 # wait polls every second until <script>.code appears; default --timeout 540 s (under the 10 min an agent's
 # shell tool allows; 0 waits forever). On TIMEOUT the script keeps running: call wait again.
 # With an .nvmrc at the worktree root, install and run use that node version from nvm (NVM_DIR, else ~/.nvm or
@@ -69,10 +71,11 @@ EXIT_NODE_VERSION=13 EXIT_STOP_FAILED=14 EXIT_TIMEOUT=15 EXIT_NOT_STARTED=16 EXI
 WAIT_TIMEOUT=540
 
 # Leader of the script's process group: runs npm run, saves its exit code (via a .tmp, so a reader never
-# sees half a file) and exits with it. $1 is the code file; the rest are npm run's arguments. Its command
-# line has "npm run", so pid_alive knows it; a TERM to the group kills it before it writes anything.
+# sees half a file; removed when the save fails) and exits with it. $1 is the code file; the rest are npm
+# run's arguments. Its command line has "npm run", so pid_alive knows it; a TERM to the group kills it
+# before it writes anything.
 # shellcheck disable=SC2016 # expanded by the wrapper bash, not here
-WRAPPER='c="$1"; shift; npm run "$@"; rc=$?; echo "$rc" > "$c.tmp" && mv -f "$c.tmp" "$c"; exit "$rc"'
+WRAPPER='c="$1"; shift; npm run "$@"; rc=$?; { echo "$rc" > "$c.tmp" && mv -f "$c.tmp" "$c"; } || rm -f "$c.tmp"; exit "$rc"'
 
 die() { echo "error: $*" >&2; exit "$EXIT_USAGE"; }
 
@@ -179,17 +182,34 @@ print_scripts() {
   if [ -n "$SCRIPTS" ]; then printf '%s\n' "$SCRIPTS" | sed 's/^/SCRIPT /'; fi
 }
 
-# pid_alive <pid>: 0 if that process runs and is an npm we started (its process group leader).
+# pid_alive <pid>: 0 if something we started still runs in that process group. <pid> is its leader, the
+# wrapper that runs npm. While the leader exists it must be ours: its command line has npm (the wrapper's
+# "npm run"), or it is a zombie ("<defunct>", ps prints no arguments then). Once it is gone, its group lives
+# on while any process it left runs (a `cmd &` in the script), and no new process gets that pid while the
+# group exists, so the group is still ours.
 pid_alive() {
   case "$1" in ""|*[!0-9]*) return 1 ;; esac
-  kill -0 "$1" 2>/dev/null || return 1
-  case "$(proc_args "$1")" in *npm*) return 0 ;; esac
-  return 1
+  if kill -0 "$1" 2>/dev/null; then
+    case "$(proc_args "$1")" in *npm*|*defunct*) return 0 ;; esac
+    return 1
+  fi
+  kill -0 -- "-$1" 2>/dev/null
 }
 
-# proc_args <pid>: its command line. ps first (Linux, macOS: an npm leader that is a zombie still shows as
-# [npm] <defunct>, so stop still ends its group); /proc when ps cannot (the ps of Git Bash has no -o, slim
-# images have no ps).
+# group_alive <pid>: 0 while any process of the group led by <pid> runs (zombies included); the leader
+# alone where a group cannot be signalled.
+group_alive() {
+  kill -0 -- "-$1" 2>/dev/null || kill -0 "$1" 2>/dev/null
+}
+
+# read_pid <file>: its content, or nothing when it cannot be read (removed meanwhile by another npm-run).
+read_pid() {
+  cat "$1" 2>/dev/null || true
+}
+
+# proc_args <pid>: its command line. ps first (Linux, macOS: a leader that is a zombie shows as
+# [bash] <defunct>, so pid_alive still takes it as ours and stop ends its group); /proc when ps cannot (the
+# ps of Git Bash has no -o, slim images have no ps).
 proc_args() {
   if ps -p "$1" -o args= 2>/dev/null; then return 0; fi
   if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' 2>/dev/null < "/proc/$1/cmdline"; fi
@@ -340,7 +360,7 @@ cmd_run() {
   fi
 
   local pid_file="$STATE/$script.pid" log="$STATE/$script.log" code_file="$STATE/$script.code" pid
-  if [ -f "$pid_file" ] && pid="$(cat "$pid_file")" && pid_alive "$pid"; then
+  if [ -f "$pid_file" ] && pid="$(read_pid "$pid_file")" && pid_alive "$pid"; then
     echo "ALREADY_RUNNING $SLUG $script $pid"
     exit "$EXIT_RUNNING"
   fi
@@ -382,7 +402,9 @@ cmd_run() {
   done
   if ! kill -0 "$pid" 2>/dev/null; then
     wait "$pid" || rc=$?
-    rm -f "$pid_file"
+    # Keep the pid while something the script left (a `cmd &`) still runs in its group, so ps lists it
+    # and stop can end it.
+    if ! kill -0 -- "-$pid" 2>/dev/null; then rm -f "$pid_file"; fi
     echo "FINISHED $SLUG $script $rc $log"
     if [ "$rc" -ne 0 ]; then
       { echo "--- last 20 lines of $log ---"; tail -n 20 "$log"; } >&2
@@ -431,7 +453,7 @@ cmd_wait() {
       return 0
     fi
     pid=""
-    if [ -f "$pid_file" ]; then pid="$(cat "$pid_file")"; fi
+    if [ -f "$pid_file" ]; then pid="$(read_pid "$pid_file")"; fi
     if ! pid_alive "$pid"; then
       # The wrapper writes the code before it exits: look once more, in case it ended just now.
       if read_code "$code_file" >/dev/null; then continue; fi
@@ -479,7 +501,7 @@ cmd_ps() {
   while IFS='	' read -r slug script file; do
     [ -n "$file" ] || continue
     any=1
-    pid="$(cat "$file")"
+    pid="$(read_pid "$file")"
     if pid_alive "$pid"; then
       echo "RUNNING $slug $script $pid ${file%.pid}.log"
     else
@@ -531,8 +553,10 @@ stop_pid() {
     fi
   fi
   kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  # Wait for the whole group, not the leader: the wrapper dies at once with TERM, while a child that traps
+  # or ignores it would keep running.
   for _ in $(seq 50); do
-    kill -0 "$pid" 2>/dev/null || return 0
+    group_alive "$pid" || return 0
     sleep 0.1
   done
   kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
@@ -561,7 +585,7 @@ cmd_stop() {
     [ -n "$file" ] || continue
     [ -z "$want" ] || [ "$slug" = "$want" ] || continue
     [ -z "$only" ] || [ "$script" = "$only" ] || continue
-    pid="$(cat "$file")"
+    pid="$(read_pid "$file")"
     if pid_alive "$pid"; then
       any=1
       if ! stop_pid "$pid"; then
@@ -597,26 +621,28 @@ cmd_clean() {
     [ -z "$want" ] || [ "$slug" = "$want" ] || continue
     dir="$(dirname "$f")"
     case "$f" in
-      *.pid) pid="$(cat "$f")"; if pid_alive "$pid"; then continue; fi ;;
+      *.pid) pid="$(read_pid "$f")"; if pid_alive "$pid"; then continue; fi ;;
       *.log)
         if [ "$(basename "$f")" = install.log ]; then
           live=0
           for p in "$dir"/*.pid; do
-            if [ -f "$p" ] && pid_alive "$(cat "$p")"; then live=1; fi
+            if [ -f "$p" ] && pid_alive "$(read_pid "$p")"; then live=1; fi
           done
           [ "$live" -eq 0 ] || continue
-        elif [ -f "${f%.log}.pid" ] && pid_alive "$(cat "${f%.log}.pid")"; then
+        elif [ -f "${f%.log}.pid" ] && pid_alive "$(read_pid "${f%.log}.pid")"; then
           continue
         fi ;;
-      *.code)
-        if [ -f "${f%.code}.pid" ] && pid_alive "$(cat "${f%.code}.pid")"; then continue; fi ;;
+      *.code|*.code.tmp)
+        p="${f%.tmp}"
+        if [ -f "${p%.code}.pid" ] && pid_alive "$(read_pid "${p%.code}.pid")"; then continue; fi ;;
       *) continue ;;
     esac
     rm -f "$f"
     echo "CLEANED $slug $(basename "$f")"
     any=1
     prune_dirs "$dir"
-  done < <(find "$base" -type f \( -name '*.pid' -o -name '*.log' -o -name '*.code' \) | LC_ALL=C sort)
+  done < <(find "$base" -type f \( -name '*.pid' -o -name '*.log' -o -name '*.code' -o -name '*.code.tmp' \) \
+    | LC_ALL=C sort)
   [ -n "$want" ] || prune_dirs "$base"
   [ "$any" -eq 1 ] || echo "NONE"
 }
