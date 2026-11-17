@@ -40,6 +40,15 @@ EOF
 WT() { echo "$ARNESS_ROOT/worktrees/$1"; }
 state() { echo "$ARNESS_ROOT/tmp/npm-run/$1"; }
 
+# dead_pid: the pid of a process that has already ended and been reaped, so nothing runs with it.
+dead_pid() {
+  local p
+  sh -c 'exit 0' &
+  p=$!
+  wait "$p" || true
+  echo "$p"
+}
+
 # group_pids <pgid>: the processes in that process group. Git Bash has no pgrep, but its ps prints the
 # PGID as the third column, after a status letter (S, I, O) in front of stopped or waiting processes.
 group_pids() {
@@ -331,9 +340,10 @@ EOF
 
 @test "ps reports EXITED for a dead pid and forgets it" {
   mkdir -p "$(state a/feat/x)"
-  echo 999999 > "$(state a/feat/x)/serve.pid"
+  dead="$(dead_pid)"
+  echo "$dead" > "$(state a/feat/x)/serve.pid"
   run "$SCRIPT" ps
-  [ "$output" = "EXITED a/feat/x serve 999999 $(state a/feat/x)/serve.log" ]
+  [ "$output" = "EXITED a/feat/x serve $dead $(state a/feat/x)/serve.log" ]
   run "$SCRIPT" ps
   [ "$output" = "NONE" ]
 }
@@ -388,7 +398,7 @@ EOF
 
 @test "an EXITED script keeps its log until clean" {
   mkdir -p "$(state a/feat/x)"
-  echo 999999 > "$(state a/feat/x)/serve.pid"
+  echo "$(dead_pid)" > "$(state a/feat/x)/serve.pid"
   echo "it died" > "$(state a/feat/x)/serve.log"
   run "$SCRIPT" ps
   [[ "$output" == "EXITED "* ]]
@@ -402,7 +412,7 @@ EOF
   pid="$(cat "$(state a/feat/x)/serve.pid")"
   echo log > "$(state a/feat/x)/install.log"
   echo old > "$(state a/feat/x)/ok.log"
-  echo 999999 > "$(state a/feat/x)/gone.pid"
+  echo "$(dead_pid)" > "$(state a/feat/x)/gone.pid"
   run "$SCRIPT" clean
   [ "$status" -eq 0 ]
   [[ "$output" == *"CLEANED a/feat/x gone.pid"* ]]
@@ -503,7 +513,7 @@ add_script() {
 
 @test "wait on a script that died without a code is NO_CODE" {
   mkdir -p "$(state a/feat/x)"
-  echo 999999 > "$(state a/feat/x)/serve.pid"
+  echo "$(dead_pid)" > "$(state a/feat/x)/serve.pid"
   echo "it died" > "$(state a/feat/x)/serve.log"
   run "$SCRIPT" wait serve
   [ "$status" -eq 17 ]
@@ -557,19 +567,6 @@ add_script() {
   [ "$output" = "NOT_STARTED a/feat/x serve" ]
 }
 
-@test "stop kills a child that ignores TERM" {
-  add_script stubborn "trap '' TERM; sleep 30"
-  "$SCRIPT" run stubborn >/dev/null
-  pid="$(cat "$(state a/feat/x)/stubborn.pid")"
-  sleep 0.5
-  [ -n "$(group_pids "$pid")" ]
-  run "$SCRIPT" stop --worktree a/feat/x stubborn
-  [ "$status" -eq 0 ]
-  [ "$output" = "STOPPED a/feat/x stubborn $pid" ]
-  sleep 0.3
-  [ -z "$(group_pids "$pid")" ]
-}
-
 # wait_code <script>: wait up to 10 s for the wrapper to save that script's code, then for it to be gone.
 wait_code() {
   for _ in $(seq 100); do
@@ -579,33 +576,66 @@ wait_code() {
   sleep 0.5
 }
 
-@test "stop still ends what a STARTED script left running after npm ended" {
-  add_script bg "sleep 1; sleep 30 & echo bg-started"
-  NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run bg
-  [[ "$output" == "STARTED a/feat/x bg "* ]]
-  pid="$(cat "$(state a/feat/x)/bg.pid")"
-  wait_code bg
-  [ -n "$(group_pids "$pid")" ]
+@test "a child that ignores TERM keeps the script RUNNING, and stop ends it with KILL after 5 s" {
+  add_script stubborn "trap '' TERM; sleep 30"
+  "$SCRIPT" run stubborn >/dev/null
+  pid="$(cat "$(state a/feat/x)/stubborn.pid")"
+  sleep 0.5
+  kill -TERM -- "-$pid"
+  sleep 1
+  # The wrapper passed the TERM on and waits for npm, which waits for the child that ignores it.
   run "$SCRIPT" ps
-  [ "$output" = "RUNNING a/feat/x bg $pid $(state a/feat/x)/bg.log" ]
-  run "$SCRIPT" stop --worktree a/feat/x bg
-  [ "$output" = "STOPPED a/feat/x bg $pid" ]
+  [ "$output" = "RUNNING a/feat/x stubborn $pid $(state a/feat/x)/stubborn.log" ]
+  [ ! -e "$(state a/feat/x)/stubborn.code" ]
+  start="$(date +%s)"
+  run "$SCRIPT" stop --worktree a/feat/x stubborn
+  [ "$status" -eq 0 ]
+  [ "$output" = "STOPPED a/feat/x stubborn $pid" ]
+  [ "$(( $(date +%s) - start ))" -ge 4 ]
   sleep 0.3
   [ -z "$(group_pids "$pid")" ]
+  [ ! -e "$(state a/feat/x)/stubborn.code" ]
 }
 
-@test "a FINISHED script that left something running keeps its pid, so stop ends it" {
-  add_script bg "sleep 30 & echo bg-started"
-  run "$SCRIPT" run bg
-  [ "$status" -eq 0 ]
-  [[ "$output" == "FINISHED a/feat/x bg 0 "* ]]
-  [ -f "$(state a/feat/x)/bg.pid" ]
-  pid="$(cat "$(state a/feat/x)/bg.pid")"
-  [ -n "$(group_pids "$pid")" ]
-  run "$SCRIPT" stop --worktree a/feat/x bg
-  [ "$output" = "STOPPED a/feat/x bg $pid" ]
-  sleep 0.3
-  [ -z "$(group_pids "$pid")" ]
+@test "a TERM from outside npm-run still saves the exit code" {
+  "$SCRIPT" run serve >/dev/null
+  pid="$(cat "$(state a/feat/x)/serve.pid")"
+  sleep 0.5
+  kill -TERM -- "-$pid"
+  run "$SCRIPT" wait serve --timeout 10
+  [ "$status" -eq 8 ]
+  [[ "${lines[0]}" == "FINISHED a/feat/x serve "* ]]
+  [ "$(cat "$(state a/feat/x)/serve.code")" -ne 0 ]
+}
+
+@test "a pid file with 1, 0 or a leading zero is never signalled: stop says NONE" {
+  for p in 1 0 01; do
+    mkdir -p "$(state a/feat/x)"
+    echo "$p" > "$(state a/feat/x)/serve.pid"
+    run "$SCRIPT" stop --all
+    [ "$status" -eq 0 ]
+    [ "$output" = "NONE" ]
+    [ ! -e "$(state a/feat/x)/serve.pid" ]
+  done
+  mkdir -p "$(state a/feat/x)"
+  echo 1 > "$(state a/feat/x)/serve.pid"
+  run "$SCRIPT" ps
+  [ "$output" = "EXITED a/feat/x serve - $(state a/feat/x)/serve.log" ]
+}
+
+@test "a pid reused by another process is taken as dead: ps says EXITED and stop leaves it alone" {
+  sleep 30 &
+  other=$!
+  mkdir -p "$(state a/feat/x)"
+  echo "$other" > "$(state a/feat/x)/serve.pid"
+  run "$SCRIPT" ps
+  [ "$output" = "EXITED a/feat/x serve $other $(state a/feat/x)/serve.log" ]
+  echo "$other" > "$(state a/feat/x)/serve.pid"
+  run "$SCRIPT" stop --all
+  [ "$output" = "NONE" ]
+  kill -0 "$other"
+  kill "$other"
+  wait "$other" 2>/dev/null || true
 }
 
 @test "the wrapper leaves no .code.tmp when it cannot save the code, and keeps npm's exit" {
@@ -631,7 +661,7 @@ wait_code() {
 @test "wait, ps and stop do not crash on a pid file they cannot read" {
   [ "$(id -u)" -ne 0 ] || skip "root reads any file"
   mkdir -p "$(state a/feat/x)"
-  echo 999999 > "$(state a/feat/x)/serve.pid"
+  echo "$(dead_pid)" > "$(state a/feat/x)/serve.pid"
   echo "it died" > "$(state a/feat/x)/serve.log"
   chmod 000 "$(state a/feat/x)/serve.pid"
   run "$SCRIPT" wait serve
@@ -640,7 +670,7 @@ wait_code() {
   run "$SCRIPT" ps
   [ "$status" -eq 0 ]
   [[ "$output" == "EXITED a/feat/x serve "* ]]
-  echo 999999 > "$(state a/feat/x)/other.pid"
+  echo "$(dead_pid)" > "$(state a/feat/x)/other.pid"
   chmod 000 "$(state a/feat/x)/other.pid"
   run "$SCRIPT" stop --all
   [ "$status" -eq 0 ]

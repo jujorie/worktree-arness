@@ -61,10 +61,10 @@ Give the shell tool a timeout longer than `--timeout` (default 540 s, under the 
 | `FINISHED <slug> <script> <code> <log>` | 8 | It failed with `<code>`. The last 20 lines are on stderr; show them. Read the log for more. |
 | `TIMEOUT <slug> <script> <pid> <log>` | 15 | Still running after `--timeout`; it keeps running. Call `wait` again, or ask the user whether to `stop` it. |
 | `NOT_STARTED <slug> <script>` | 16 | Not started in that worktree, or stopped or cleaned since. Check the script and worktree; do not start it unless that was the task. |
-| `NO_CODE <slug> <script> <log>` | 17 | It ended without saving its code (killed outside `stop`, or started by an older npm-run). Read the log to tell what happened. |
+| `NO_CODE <slug> <script> <log>` | 17 | It ended without saving its code (killed with KILL outside `stop`, or started by an older npm-run). Read the log to tell what happened. |
 | `NOT_FOUND <slug>` / `CHOOSE_WORKTREE` / error on stderr | 4 / 10 / 2 | As in the table above. |
 
-The code is saved in `tmp/npm-run/<repo>/<name>/<script>.code` when the script ends, also after npm-run returned. A new `run` of that script removes the old one first. A script ended with `stop` saves no code (`stop` removes any it finds), so `wait` then says `NOT_STARTED`.
+The code is saved in `tmp/npm-run/<repo>/<name>/<script>.code` when the script ends, also after npm-run returned. A new `run` of that script removes the old one first. The pid saved is a wrapper that passes TERM and INT on to npm and lives as long as npm, so a TERM from outside npm-run still saves a code. A script ended with `stop` leaves no code (`stop` removes it with the pid and log), so `wait` then says `NOT_STARTED`.
 
 ### List, stop and clean up
 
@@ -77,7 +77,7 @@ skills/npm-run/scripts/npm-run.sh clean [--worktree <repo>/<name>]     # CLEANED
 skills/npm-run/scripts/npm-run.sh scripts [--worktree <repo>/<name>]   # SCRIPT lines
 ```
 
-`stop` prints `STOPPED <slug> <script> <pid>` per process (TERM to its process group, KILL after 5 s to whatever of the group still runs; in Git Bash, first `taskkill /T /F` on its Windows process tree), or `NONE`. A script counts as running while anything it started runs, also what it left behind (`cmd &`) after npm ended, even after a `FINISHED`. `STOP_FAILED <slug> <script> <pid>` (exit 14): taskkill could not end that tree and part of it may still run; its pid file is kept, so `stop` can be retried. Show the `warning:` from stderr; do not retry in a loop. Ask before `stop --all` if the user did not say it.
+`stop` prints `STOPPED <slug> <script> <pid>` per process (TERM to its process group; KILL to the group when it still runs after 5 s, for example a child that ignores TERM; in Git Bash, first `taskkill /T /F` on its Windows process tree), or `NONE`. `STOP_FAILED <slug> <script> <pid>` (exit 14): taskkill could not end that tree and part of it may still run; its pid file is kept, so `stop` can be retried. Show the `warning:` from stderr; do not retry in a loop. Ask before `stop --all` if the user did not say it.
 
 Files live in `tmp/npm-run/<repo>/<name>/`. `stop` removes the pid, log and code of what it stops, plus the `install.log` and folders left empty. A script that ended by itself (`FINISHED`, `EXITED`) keeps its log and code, the only record of what happened. Read them first if they matter, then `clean` removes the logs, codes and pids of everything that no longer runs and the empty folders (`CLEANED <slug> <file>` per file). It never touches what still runs.
 
