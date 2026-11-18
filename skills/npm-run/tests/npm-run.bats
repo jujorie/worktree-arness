@@ -714,10 +714,39 @@ signal_wrapper_only() {
   [ "$output" = "FINISHED a/feat/x slow 0 $(state a/feat/x)/slow.log" ]
 }
 
+@test "the wrapper saves npm's real code when a signal comes as npm ends, also with POSIXLY_CORRECT" {
+  mkdir -p "$TMP/sigbin"
+  # An npm that signals the wrapper (its parent) and ends at once: the wait it cuts short is waited again.
+  printf '#!/bin/sh\nkill -TERM $PPID\nexit 3\n' > "$TMP/sigbin/npm"
+  chmod +x "$TMP/sigbin/npm"
+  for _ in 1 2 3 4 5; do
+    rm -f "$TMP/x.code"
+    run env PATH="$TMP/sigbin:$PATH" bash -c \
+      'source "$1"; POSIXLY_CORRECT=1 "$BASH" -c "$WRAPPER" npm-run "$2" x' _ "$SCRIPT" "$TMP/x.code"
+    [ "$status" -eq 3 ]
+    [ "$(cat "$TMP/x.code")" = 3 ]
+  done
+}
+
+@test "a code saved by the run before is not left by a run that stops at CONFIRM_INSTALL" {
+  local real_npm
+  real_npm="$(command -v npm)"
+  mkdir -p "$TMP/npmbin" "$(state a/feat/x)"
+  printf '#!/usr/bin/env bash\nif [ "$1" = pkg ]; then echo 7 > "%s"; fi\nexec "%s" "$@"\n' \
+    "$(state a/feat/x)/ok.code" "$real_npm" > "$TMP/npmbin/npm"
+  chmod +x "$TMP/npmbin/npm"
+  rmdir "$(WT a/feat/x)/node_modules"
+  PATH="$TMP/npmbin:$PATH" run "$SCRIPT" run ok
+  [ "$status" -eq 11 ]
+  [ ! -e "$(state a/feat/x)/ok.code" ]
+}
+
 @test "the wrapper ends its wait loop on wait's result and switches the trap off before saving" {
   run bash -c 'source "$1"; printf "%s\n" "$WRAPPER"' _ "$SCRIPT"
   [ "$status" -eq 0 ]
   [[ "$output" != *'kill -0'* ]] || false
+  # posix mode (POSIXLY_CORRECT) would forget npm's status once a wait returned it.
+  [[ "$output" == 'set +o posix; '* ]] || false
   # The forwarding trap is switched off between the wait loop and the save.
   [[ "$output" == *'done; trap "" TERM INT; { echo'* ]] || false
 }
