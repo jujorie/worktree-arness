@@ -33,7 +33,7 @@ teardown() { cleanup_sandbox; }
   echo keep > "$SANDBOX/.claude/skills"
   run with_lib 'link ../skills .claude/skills'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"skipping"* ]]
+  [[ "$output" == *"skipping"* ]] || false
   [ ! -L "$SANDBOX/.claude/skills" ]
   [ "$(cat "$SANDBOX/.claude/skills")" = "keep" ]
 }
@@ -71,7 +71,7 @@ teardown() { cleanup_sandbox; }
   run with_lib 'render providers/claude/settings.json .claude/settings.json'
   [ "$status" -eq 0 ]
   grep -qF "\"$SANDBOX/.memory\"" "$SANDBOX/.claude/settings.json"
-  ! grep -qF '{{' "$SANDBOX/.claude/settings.json"
+  ! grep -qF '{{' "$SANDBOX/.claude/settings.json" || false
 }
 
 @test "render output keeps the JSON structure" {
@@ -134,7 +134,7 @@ teardown() { cleanup_sandbox; }
   fake_os CYGWIN_NT-10.0
   run with_lib 'link providers/claude/CLAUDE.md CLAUDE.md'
   [ "$status" -eq 0 ]
-  ! grep -q mklink "$FAKE_CALLS"
+  ! grep -q mklink "$FAKE_CALLS" || false
   [ -L "$SANDBOX/CLAUDE.md" ]
 }
 
@@ -148,7 +148,7 @@ teardown() { cleanup_sandbox; }
 
 @test "render without plugins drops the plugin rules marker line" {
   with_lib 'render providers/claude/settings.json .claude/settings.json'
-  ! grep -qF 'PLUGIN_ALLOW' "$SANDBOX/.claude/settings.json"
+  ! grep -qF 'PLUGIN_ALLOW' "$SANDBOX/.claude/settings.json" || false
   [ "$(grep -c . "$SANDBOX/.claude/settings.json")" -eq "$(( $(grep -c . "$SANDBOX/providers/claude/settings.json") - 1 ))" ]
   json_looks_valid "$SANDBOX/.claude/settings.json"
 }
@@ -170,10 +170,10 @@ teardown() { cleanup_sandbox; }
     > "$SANDBOX/plugins/.demo.state"
   run with_lib 'render providers/claude/settings.json .claude/settings.json'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"unsafe rule in .demo.state skipped"* ]]
-  ! grep -qF 'bypassPermissions' "$SANDBOX/.claude/settings.json"
-  ! grep -qF 'Bash(*)' "$SANDBOX/.claude/settings.json"
-  ! grep -qF 'a\b' "$SANDBOX/.claude/settings.json"
+  [[ "$output" == *"unsafe rule in .demo.state skipped"* ]] || false
+  ! grep -qF 'bypassPermissions' "$SANDBOX/.claude/settings.json" || false
+  ! grep -qF 'Bash(*)' "$SANDBOX/.claude/settings.json" || false
+  ! grep -qF 'a\b' "$SANDBOX/.claude/settings.json" || false
   grep -qF '"Skill(ok)",' "$SANDBOX/.claude/settings.json"
   json_looks_valid "$SANDBOX/.claude/settings.json"
 }

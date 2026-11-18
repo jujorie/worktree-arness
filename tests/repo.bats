@@ -17,7 +17,7 @@ skill_scripts() {
   # entry points only: scripts/lib.sh is sourced, not executed
   for f in "$REPO_ROOT"/setup.sh "$REPO_ROOT"/providers/*/setup.sh $(skill_scripts); do
     [ "$(head -1 "$f")" = "#!/usr/bin/env bash" ]
-    ! grep -q $'\r' "$f"
+    ! grep -q $'\r' "$f" || false
   done
 }
 
@@ -35,12 +35,12 @@ skill_scripts() {
 }
 
 @test "settings template has no machine-specific absolute paths" {
-  ! grep -E '/(Users|home)/' "$REPO_ROOT/providers/claude/settings.json"
+  ! grep -E '/(Users|home)/' "$REPO_ROOT/providers/claude/settings.json" || false
 }
 
 @test "no GNU-only flags in scripts" {
   ! grep -nE 'readlink -f|sed -i|date -d|grep -P|mapfile|readarray' \
-      $(all_scripts)
+      $(all_scripts) || false
 }
 
 @test "shellcheck passes" {
@@ -128,11 +128,11 @@ permission_problems() {
   printf -- '---\nname: zz-new\n---\n' > "$fake/skills/zz-new/SKILL.md"
   run permission_problems "$fake"
   rm -rf "$fake"
-  [[ "$output" == *"claude: missing Skill(zz-new)"* ]]
-  [[ "$output" == *"claude: missing Bash(skills/zz-new/scripts/zz.sh *)"* ]]
-  [[ "$output" == *"claude: missing Bash({{\$ARNESS_ROOT}}/skills/zz-new/scripts/zz.sh *)"* ]]
-  [[ "$output" == *"opencode: skill zz-new is not allowed"* ]]
-  [[ "$output" == *"skill zz-new: allowed-tools lacks zz.sh"* ]]
+  [[ "$output" == *"claude: missing Skill(zz-new)"* ]] || false
+  [[ "$output" == *"claude: missing Bash(skills/zz-new/scripts/zz.sh *)"* ]] || false
+  [[ "$output" == *"claude: missing Bash({{\$ARNESS_ROOT}}/skills/zz-new/scripts/zz.sh *)"* ]] || false
+  [[ "$output" == *"opencode: skill zz-new is not allowed"* ]] || false
+  [[ "$output" == *"skill zz-new: allowed-tools lacks zz.sh"* ]] || false
 }
 
 @test "the permission check catches stale entries" {
@@ -141,9 +141,9 @@ permission_problems() {
   rm -rf "$fake/skills/worktree-clean"
   run permission_problems "$fake"
   rm -rf "$fake"
-  [[ "$output" == *"claude: stale Skill(worktree-clean)"* ]]
-  [[ "$output" == *"claude: stale Bash(skills/worktree-clean/scripts/worktree-clean.sh *)"* ]]
-  [[ "$output" == *"opencode: stale skill worktree-clean"* ]]
+  [[ "$output" == *"claude: stale Skill(worktree-clean)"* ]] || false
+  [[ "$output" == *"claude: stale Bash(skills/worktree-clean/scripts/worktree-clean.sh *)"* ]] || false
+  [[ "$output" == *"opencode: stale skill worktree-clean"* ]] || false
 }
 
 @test "json_looks_valid accepts well-formed JSON and rejects broken structure" {
@@ -153,9 +153,9 @@ permission_problems() {
   printf '{ "a": 1\n' > "$d/open.json"
   printf '"a": 1\n' > "$d/noobject.json"
   json_looks_valid "$d/ok.json"
-  ! json_looks_valid "$d/brackets.json"
-  ! json_looks_valid "$d/open.json"
-  ! json_looks_valid "$d/noobject.json"
+  ! json_looks_valid "$d/brackets.json" || false
+  ! json_looks_valid "$d/open.json" || false
+  ! json_looks_valid "$d/noobject.json" || false
   rm -rf "$d"
 }
 
@@ -176,10 +176,10 @@ mk_git_root() {
   touch "$d/skills/repo-clone/SKILL.md" "$d/skills/my-private/SKILL.md" "$d/skills/pdf/SKILL.md" "$d/skills/README.md"
   run shared_skill_dirs "$d"
   rm -rf "$d"
-  [[ "$output" == *"/skills/repo-clone/" ]]
-  [[ "$output" != *"my-private"* ]]
-  [[ "$output" != *"pdf"* ]]
-  [[ "$output" != *"README"* ]]
+  [[ "$output" == *"/skills/repo-clone/" ]] || false
+  [[ "$output" != *"my-private"* ]] || false
+  [[ "$output" != *"pdf"* ]] || false
+  [[ "$output" != *"README"* ]] || false
 }
 
 @test "shared_skill_dirs: outside git every folder counts" {
@@ -187,8 +187,8 @@ mk_git_root() {
   mkdir -p "$d/skills/a" "$d/skills/b"
   run shared_skill_dirs "$d"
   rm -rf "$d"
-  [[ "$output" == *"/skills/a/"* ]]
-  [[ "$output" == *"/skills/b/"* ]]
+  [[ "$output" == *"/skills/a/"* ]] || false
+  [[ "$output" == *"/skills/b/"* ]] || false
 }
 
 @test "the permission check ignores local skills (any name, name may differ from the folder)" {
@@ -214,24 +214,24 @@ mk_git_root() {
   sed -i.bak '/worktree-clean/d' "$fake/skills/.gitignore"
   run permission_problems "$fake"
   rm -rf "$fake"
-  [[ "$output" == *"claude: stale Skill(worktree-clean)"* ]]
+  [[ "$output" == *"claude: stale Skill(worktree-clean)"* ]] || false
 }
 
 @test "unlisted skills are git-ignored and every tracked skill is allowlisted" {
   git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout"
   git -C "$REPO_ROOT" check-ignore -q skills/anything-else/SKILL.md
   git -C "$REPO_ROOT" check-ignore -q skills/anything-else/scripts/x.sh
-  ! git -C "$REPO_ROOT" check-ignore -q skills/README.md
+  ! git -C "$REPO_ROOT" check-ignore -q skills/README.md || false
   while IFS= read -r name; do
-    ! git -C "$REPO_ROOT" check-ignore -q "skills/$name/SKILL.md"
+    ! git -C "$REPO_ROOT" check-ignore -q "skills/$name/SKILL.md" || false
   done < <(git -C "$REPO_ROOT" ls-files skills | cut -d/ -f2 | sort -u | grep -v '^README.md$')
 }
 
 @test "unlisted agents are git-ignored and the agents README is not" {
   git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout"
   git -C "$REPO_ROOT" check-ignore -q agents/anything-else.md
-  ! git -C "$REPO_ROOT" check-ignore -q agents/README.md
-  ! git -C "$REPO_ROOT" check-ignore -q agents/.gitignore
+  ! git -C "$REPO_ROOT" check-ignore -q agents/README.md || false
+  ! git -C "$REPO_ROOT" check-ignore -q agents/.gitignore || false
 }
 
 @test "the plugin rules marker is the first entry of permissions.allow" {
@@ -241,7 +241,7 @@ mk_git_root() {
 }
 
 @test "plugin-manage apply is never pre-allowed" {
-  ! grep -F 'plugin-manage.sh' "$REPO_ROOT/providers/claude/settings.json" | grep -qE 'plugin-manage\.sh (\*|apply)'
-  ! grep '^allowed-tools:' "$REPO_ROOT/skills/plugin-manage/SKILL.md" | grep -qE 'plugin-manage\.sh (\*|apply)'
+  ! grep -F 'plugin-manage.sh' "$REPO_ROOT/providers/claude/settings.json" | grep -qE 'plugin-manage\.sh (\*|apply)' || false
+  ! grep '^allowed-tools:' "$REPO_ROOT/skills/plugin-manage/SKILL.md" | grep -qE 'plugin-manage\.sh (\*|apply)' || false
   grep -qF '"skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"' "$REPO_ROOT/providers/opencode/opencode.json"
 }

@@ -7,27 +7,27 @@ teardown() { cleanup_sandbox; }
 @test "no args fails and lists available providers" {
   run bash "$SANDBOX/setup.sh"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--provider is required"* ]]
-  [[ "$output" == *"claude"* && "$output" == *"codex"* && "$output" == *"opencode"* ]]
+  [[ "$output" == *"--provider is required"* ]] || false
+  [[ "$output" == *"claude"* && "$output" == *"codex"* && "$output" == *"opencode"* ]] || false
   [ ! -e "$SANDBOX/.claude" ] && [ ! -e "$SANDBOX/.agents" ]
 }
 
 @test "--help prints usage and exits 0" {
   run bash "$SANDBOX/setup.sh" --help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Usage:"* ]]
+  [[ "$output" == *"Usage:"* ]] || false
 }
 
 @test "auto with no CLIs installed fails with usage" {
   run env PATH="/usr/bin:/bin" bash "$SANDBOX/setup.sh" --provider auto
   [ "$status" -eq 1 ]
-  [[ "$output" == *"no installed provider"* ]]
+  [[ "$output" == *"no installed provider"* ]] || false
 }
 
 @test "unknown provider is rejected" {
   run bash "$SANDBOX/setup.sh" --provider nope
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown provider"* && "$output" == *"Usage:"* ]]
+  [[ "$output" == *"unknown provider"* && "$output" == *"Usage:"* ]] || false
 }
 
 @test "unknown argument is rejected" {
@@ -66,7 +66,7 @@ teardown() { cleanup_sandbox; }
 @test "all runs every provider" {
   run bash "$SANDBOX/setup.sh" --provider all
   [ "$status" -eq 0 ]
-  [[ "$output" == *"==> claude"* && "$output" == *"==> codex"* && "$output" == *"==> opencode"* ]]
+  [[ "$output" == *"==> claude"* && "$output" == *"==> codex"* && "$output" == *"==> opencode"* ]] || false
 }
 
 @test "auto selects only installed CLIs" {
@@ -74,8 +74,8 @@ teardown() { cleanup_sandbox; }
   printf '#!/bin/sh\n' > "$SANDBOX/fakebin/codex"; chmod +x "$SANDBOX/fakebin/codex"
   run env PATH="$SANDBOX/fakebin:/usr/bin:/bin" bash "$SANDBOX/setup.sh" --provider auto
   [ "$status" -eq 0 ]
-  [[ "$output" == *"==> codex"* ]]
-  [[ "$output" != *"==> claude"* ]]
+  [[ "$output" == *"==> codex"* ]] || false
+  [[ "$output" != *"==> claude"* ]] || false
 }
 
 @test "running twice gives identical result" {
