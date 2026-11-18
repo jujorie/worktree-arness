@@ -64,7 +64,7 @@ teardown() { rm -rf "$TMP"; }
 @test "missing URL is a usage error" {
   run "$SCRIPT"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"missing repository URL"* ]]
+  [[ "$output" == *"missing repository URL"* ]] || false
 }
 
 @test "invalid URLs are rejected and nothing is created" {
