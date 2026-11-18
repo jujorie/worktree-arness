@@ -678,6 +678,33 @@ signal_wrapper_only() {
   [ -f "$(state a/feat/x)/../x-other.code" ]
 }
 
+@test "a run that fails with INVALID_PACKAGE_JSON (and UNKNOWN_SCRIPT) also removes the old code" {
+  mkdir -p "$(state a/feat/x)"
+  echo 0 > "$(state a/feat/x)/ok.code"
+  echo 0 > "$(state a/feat/x)/gone.code"
+  run "$SCRIPT" run gone
+  [ "$status" -eq 7 ]
+  [ ! -e "$(state a/feat/x)/gone.code" ]
+  cp "$(WT a/feat/x)/package.json" "$TMP/package.json"
+  echo 'not json' > "$(WT a/feat/x)/package.json"
+  run "$SCRIPT" run ok
+  [ "$status" -eq 6 ]
+  [ ! -e "$(state a/feat/x)/ok.code" ]
+  # wait no longer answers with the result of the run before.
+  cp "$TMP/package.json" "$(WT a/feat/x)/package.json"
+  run "$SCRIPT" wait ok
+  [ "$status" -ne 0 ]
+  [[ "$output" != FINISHED* ]] || false
+}
+
+@test "the wrapper never uses npm's pid after reaping it: no kill -0 loop, trap off before saving" {
+  run bash -c 'source "$1"; printf "%s\n" "$WRAPPER"' _ "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'kill -0'* ]] || false
+  # The forwarding trap is switched off between the wait loop and the save.
+  [[ "$output" == *'done; trap "" TERM INT; { echo'* ]] || false
+}
+
 @test "a run that stops early without npm keeps the code of a script that still runs" {
   "$SCRIPT" run serve >/dev/null
   echo 0 > "$(state a/feat/x)/serve.code"

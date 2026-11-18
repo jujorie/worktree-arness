@@ -77,10 +77,12 @@ WAIT_TIMEOUT=540
 # to npm (a background job of a non-interactive shell ignores INT, so INT goes on as TERM) and wait again,
 # so a TERM npm ignores does not end it. HUP is ignored from nohup and cannot be trapped. Then it saves npm's
 # exit code (via a .tmp, so a reader never sees half a file; removed when the save fails) and exits with it.
-# Its command line has "npm run", so pid_alive knows it. bash keeps the status of a reaped child, so the
-# last `wait` gives npm's code even after a wait cut short by a signal.
+# Its command line has "npm run", so pid_alive knows it. The loop ends on the result of `wait`, never by
+# probing npm's pid (free once reaped): the trap sets s, so a wait cut short by a signal is waited again;
+# bash keeps a reaped child's status, so that wait still gives npm's code. The trap is off before the save,
+# so no signal reaches a pid that is no longer npm, nor cuts the save.
 # shellcheck disable=SC2016 # expanded by the wrapper bash, not here
-WRAPPER='c="$1"; shift; npm run "$@" & n=$!; trap "kill -TERM $n 2>/dev/null" TERM INT; while kill -0 "$n" 2>/dev/null; do wait "$n"; done; wait "$n"; rc=$?; { echo "$rc" > "$c.tmp" && mv -f "$c.tmp" "$c"; } || rm -f "$c.tmp"; exit "$rc"'
+WRAPPER='c="$1"; shift; npm run "$@" & n=$!; trap "s=1; kill -TERM $n 2>/dev/null" TERM INT; while :; do s=0; wait "$n"; rc=$?; [ "$s" = 1 ] || break; done; trap "" TERM INT; { echo "$rc" > "$c.tmp" && mv -f "$c.tmp" "$c"; } || rm -f "$c.tmp"; exit "$rc"'
 
 die() { echo "error: $*" >&2; exit "$EXIT_USAGE"; }
 
@@ -355,14 +357,14 @@ cmd_run() {
   done
 
   resolve_worktree "$want"
+  # Once, before any status below: every way this run ends (an error, a question, STARTED) leaves no code of
+  # an earlier run for wait to answer with.
+  if [ -n "$script" ]; then clear_old_code "$script"; fi
   # The .nvmrc node first in PATH, since npm may only be reachable through nvm. A version nvm lacks is
   # reported after the script checks (listing the scripts needs no node version) and before the install
   # question; first only when there is no npm to read the scripts with.
   use_nvmrc
-  if ! command -v npm >/dev/null 2>&1; then
-    if [ -n "$script" ]; then clear_old_code "$script"; fi
-    no_node_version
-  fi
+  if ! command -v npm >/dev/null 2>&1; then no_node_version; fi
   need_npm
   read_scripts
   if [ -z "$script" ]; then
@@ -381,8 +383,6 @@ cmd_run() {
     echo "ALREADY_RUNNING $SLUG $script $pid"
     exit "$EXIT_RUNNING"
   fi
-  # Before any stop below (NO_NODE_VERSION, CONFIRM_INSTALL, INSTALL_FAILED) as well.
-  clear_old_code "$script"
   no_node_version
 
   if [ ! -d "$WT/node_modules" ]; then

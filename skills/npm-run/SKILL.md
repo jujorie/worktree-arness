@@ -47,7 +47,7 @@ Policy for a version that is missing: with nvm installed (`NVM_HOME` set, or `nv
 
 ### Wait for a script to end
 
-For tests, checks and builds: `run` and then `wait`. It blocks until the script ends and gives its exit code, also when it ended before `wait` was called (it answers at once then).
+For tests, checks and builds: `run` and then `wait`. It blocks until the script ends and gives its exit code, also when it ended before `wait` was called (it answers at once then). Call `wait` only after `run` has returned `STARTED` or `FINISHED`, never alongside it: while `run` still installs or starts the script there is no pid yet, and `wait` answers `NO_CODE` or `NOT_STARTED`.
 
 ```bash
 skills/npm-run/scripts/npm-run.sh wait [--worktree <repo>/<name>] <script> [--timeout <seconds>]
