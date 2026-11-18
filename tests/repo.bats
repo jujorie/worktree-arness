@@ -20,16 +20,16 @@ shared_bats_files() {
   while IFS= read -r d; do ls "$d"tests/*.bats 2>/dev/null || true; done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
-# Prints file:line of each assertion that cannot fail the test, without a trailing
-# `|| false`: a lone `[[ ... ]]` or `(( ... ))` (bash 3.2 ignores them for errexit),
-# a bare `! cmd` (no bash stops on it) and a list of `[ ... ]` / `[[ ... ]]` /
-# `(( ... ))` checks joined with `&&` (no bash stops when one that is not the last
-# fails). The rules look at the line without its quoted strings and trailing comment.
-# Lines continued with `\` are joined first and heredoc bodies are skipped; a heredoc
-# still open at the end of a file is reported. if/while conditions, lines with `||`
-# and `&&` lists that run something other than a check are not matched.
-# Known limit: quotes are stripped by simple patterns, so a `"` inside '...' (or a
-# `'` inside "...") can confuse them; no shared bats file has one today.
+# Prints file:line of each assertion that cannot fail the test. One rule: a line that
+# starts with `[`, `[[`, `((` or `!` is an assertion and must have a `||` (normally
+# `|| false`); control flow is written as `if`. The only exception is a lone `[ ... ]`
+# with no `&&`, a plain command that fails the test in every bash. if/elif/while/until
+# conditions do not start with those tokens, so they are never matched, and neither
+# is a list that starts with another command (`grep -q a f && grep -q b f`), by design.
+# The rule looks at the logical line: continuations joined, quoted strings and the
+# trailing comment removed, heredoc bodies skipped (a heredoc still open at the end
+# of a file is reported). Known limit: an odd number of `"` inside '...' can confuse
+# the quote stripping.
 silent_assertions() {
   awk '
     # The line without quoted strings and trailing comment; a quoted heredoc
@@ -43,14 +43,9 @@ silent_assertions() {
       sub(/^#.*$/, "", s); sub(/[ \t]#.*$/, "", s)
       return s
     }
-    function is_check(s) {
-      return s ~ /^[ \t]*(\[\[? .*\]\]?|\(\(.*\)\))[ \t]*$/
-    }
-    function check_list(s,   n, i, p) {
-      if (s !~ /&&/ || s ~ /\|\|/) return 0
-      n = split(s, p, /&&/)
-      for (i = 1; i <= n; i++) if (!is_check(p[i])) return 0
-      return 1
+    function silent(s) {
+      if (s !~ /^[ \t]*(\[|\(\(|![ \t])/ || s ~ /\|\|/) return 0
+      return !(s ~ /^[ \t]*\[[ \t]/ && s !~ /&&/)
     }
     function unterminated() { if (tag != "") print file ": unterminated heredoc " tag }
     FNR == 1 { unterminated(); tag = ""; line = ""; file = FILENAME }
@@ -64,9 +59,7 @@ silent_assertions() {
     }
     /\\$/ { sub(/\\$/, "", line); next }
     {
-      c = clean(line)
-      if (c ~ /^[ \t]*(\[\[.*\]\]|\(\(.*\)\))[ \t]*$/ || (c ~ /^[ \t]*! / && c !~ /\|\|/) || check_list(c))
-        print FILENAME ":" FNR ": " line
+      if (silent(clean(line))) print FILENAME ":" FNR ": " line
       line = ""
     }
     END { unterminated() }
@@ -107,25 +100,31 @@ silent_assertions() {
   run silent_assertions $(shared_bats_files)
   [ "$status" -eq 0 ]
   [ -z "$output" ] || {
-    echo "end each file:line assertion with || false, and close each unterminated heredoc:"
+    echo "end each file:line assertion with || false (write control flow as if), and close each unterminated heredoc:"
     echo "$output"; false
   }
 }
 
-@test "the silent assertion check flags lone [[, bare ! and && lists of checks, and nothing else" {
+@test "the silent assertion check flags lines starting with [, [[, (( or ! without ||, and nothing else" {
   d="$(mktemp -d)"
   cat > "$d/x.bats" <<'EOF'
   [[ "$output" == *a* ]]
   ! grep -q a f
   ! grep -q a \
       f
-  [ "$status" -eq 0 ] && [[ "$output" == *a* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *a* && "$output" == *b* ]]
   [[ "$output" == *a* ]] && [ "$status" -eq 0 ]
-  [ -f x ] && [ -d y ] && [ ! -e z ]
+  [ -f x ] && [ -d y ]
+  [ -f x ] && rm x
+  [ -f x ] && [ -d y ] && rm x
   [[ "$output" == *a* ]]  # c
   (( x > 1 ))
   [ -n "$x" ] && (( x > 1 ))
   [[ "$output" == "a # b" ]]
+  [ "$x" = 'a ] && [ b' ] && echo "] && ["
+  [ "$status" -eq 0 ]
+  [ "$x" = "a && b" ]
+  [ "$x" = "a # b" ]  # c
   [[ "$output" == *a* ]] || false
   ! grep -q a f || false
   ! grep -q a f || { echo no; false; }
@@ -134,16 +133,14 @@ silent_assertions() {
   ! grep -q a \
       f || false
   if [[ "$output" == *a* ]]; then :; fi
+  if [ -f x ] && [ -d y ]; then :
+  elif [ -f y ]; then :; fi
   while [[ -n "$x" ]]; do :; done
-  if [ -f x ] && [ -d y ]; then :; fi
-  [ -f x ] && rm x
-  [ -f x ] && [ -d y ] && rm x
-  [ "$x" = "a && b" ]
-  [ "$x" = 'a ] && [ b' ] && echo "] && ["
+  until [ -f x ]; do :; done
   [ "$status" -eq 0 ] && [ -z "$output" ] || false
   [ "$status" -eq 4 ] && [[ "$output" == *a* ]] || { echo no; false; }
-  [[ "$output" == *a* ]] || { echo no; false; }
   [[ "$output" == *a* && "$output" == *b* ]] || false
+  grep -q a f && grep -q b f
   cat > f <<'IN'
   [[ heredoc text, not an assertion ]]
   ! neither is this
@@ -152,17 +149,9 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 10 ]
-  [ "${lines[0]}" = "$d/x.bats:1:   [[ \"\$output\" == *a* ]]" ]
-  [ "${lines[1]}" = "$d/x.bats:2:   ! grep -q a f" ]
+  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 " ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
-  [ "${lines[3]}" = "$d/x.bats:5:   [ \"\$status\" -eq 0 ] && [[ \"\$output\" == *a* ]]" ]
-  [ "${lines[4]}" = "$d/x.bats:6:   [[ \"\$output\" == *a* ]] && [ \"\$status\" -eq 0 ]" ]
-  [ "${lines[5]}" = "$d/x.bats:7:   [ -f x ] && [ -d y ] && [ ! -e z ]" ]
-  [ "${lines[6]}" = "$d/x.bats:8:   [[ \"\$output\" == *a* ]]  # c" ]
-  [ "${lines[7]}" = "$d/x.bats:9:   (( x > 1 ))" ]
-  [ "${lines[8]}" = "$d/x.bats:10:   [ -n \"\$x\" ] && (( x > 1 ))" ]
-  [ "${lines[9]}" = "$d/x.bats:11:   [[ \"\$output\" == \"a # b\" ]]" ]
+  [ "${lines[8]}" = "$d/x.bats:10:   [[ \"\$output\" == *a* ]]  # c" ]
 }
 
 @test "the silent assertion check handles column-0 comments, closed quoted heredocs and continuations across files" {
