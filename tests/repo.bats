@@ -20,13 +20,21 @@ shared_bats_files() {
   while IFS= read -r d; do ls "$d"tests/*.bats 2>/dev/null || true; done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
-# Prints file:line of each assertion that cannot fail the test: a lone `[[ ... ]]`
-# (bash 3.2 ignores it for errexit) or a bare `! cmd` (no bash stops on it) without
-# a trailing `|| false`. Lines continued with `\` are joined first and heredoc bodies
-# are skipped. Lines where `[[` is inside an if/while or an &&/|| list outside the
-# brackets are not matched.
+# Prints file:line of each assertion that cannot fail the test, without a trailing
+# `|| false`: a lone `[[ ... ]]` (bash 3.2 ignores it for errexit), a bare `! cmd`
+# (no bash stops on it) and a list of `[ ... ]` / `[[ ... ]]` checks joined with `&&`
+# (no bash stops when one that is not the last fails). Lines continued with `\` are
+# joined first and heredoc bodies are skipped. if/while conditions, lines with `||`
+# and `&&` lists that run something other than a check are not matched.
 silent_assertions() {
   awk '
+    function check_list(s,   n, i, p) {
+      gsub(/"([^"\\]|\\.)*"/, "\"\"", s); gsub(/\047[^\047]*\047/, "\047\047", s)
+      if (s !~ /&&/ || s ~ /\|\|/) return 0
+      n = split(s, p, /&&/)
+      for (i = 1; i <= n; i++) if (p[i] !~ /^[ \t]*\[\[? .*\]\]?[ \t]*$/) return 0
+      return 1
+    }
     tag != "" { if ($0 ~ "^[ \t]*" tag "[ \t]*$") tag = ""; next }
     /<<-?[ \t]*["\047]?[A-Za-z_]/ && !/<<</ {
       tag = $0; sub(/.*<<-?[ \t]*["\047]?/, "", tag); sub(/[^A-Za-z0-9_].*$/, "", tag)
@@ -34,7 +42,7 @@ silent_assertions() {
     { line = line $0 }
     /\\$/ { sub(/\\$/, "", line); next }
     {
-      if (line ~ /^[ \t]*\[\[.*\]\][ \t]*$/ || (line ~ /^[ \t]*! / && line !~ /\|\| false[ \t]*$/))
+      if (line ~ /^[ \t]*\[\[.*\]\][ \t]*$/ || (line ~ /^[ \t]*! / && line !~ /\|\| false[ \t]*$/) || check_list(line))
         print FILENAME ":" FNR ": " line
       line = ""
     }
@@ -77,21 +85,29 @@ silent_assertions() {
   [ -z "$output" ] || { echo "end these lines with || false:"; echo "$output"; false; }
 }
 
-@test "the silent assertion check flags lone [[ and bare !, and nothing else" {
+@test "the silent assertion check flags lone [[, bare ! and && lists of checks, and nothing else" {
   d="$(mktemp -d)"
   cat > "$d/x.bats" <<'EOF'
   [[ "$output" == *a* ]]
   ! grep -q a f
   ! grep -q a \
       f
+  [ "$status" -eq 0 ] && [[ "$output" == *a* ]]
+  [[ "$output" == *a* ]] && [ "$status" -eq 0 ]
+  [ -f x ] && [ -d y ] && [ ! -e z ]
   [[ "$output" == *a* ]] || false
   ! grep -q a f || false
   ! grep -q a \
       f || false
   if [[ "$output" == *a* ]]; then :; fi
   while [[ -n "$x" ]]; do :; done
-  [ "$status" -eq 0 ] && [[ "$output" == *a* ]]
-  [[ "$output" == *a* ]] && [ "$status" -eq 0 ]
+  if [ -f x ] && [ -d y ]; then :; fi
+  [ -f x ] && rm x
+  [ -f x ] && [ -d y ] && rm x
+  [ "$x" = "a && b" ]
+  [ "$x" = 'a ] && [ b' ] && echo "] && ["
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
+  [ "$status" -eq 4 ] && [[ "$output" == *a* ]] || { echo no; false; }
   [[ "$output" == *a* ]] || { echo no; false; }
   [[ "$output" == *a* && "$output" == *b* ]] || false
   cat > f <<'IN'
@@ -102,10 +118,13 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 3 ]
+  [ "${#lines[@]}" -eq 6 ]
   [ "${lines[0]}" = "$d/x.bats:1:   [[ \"\$output\" == *a* ]]" ]
   [ "${lines[1]}" = "$d/x.bats:2:   ! grep -q a f" ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
+  [ "${lines[3]}" = "$d/x.bats:5:   [ \"\$status\" -eq 0 ] && [[ \"\$output\" == *a* ]]" ]
+  [ "${lines[4]}" = "$d/x.bats:6:   [[ \"\$output\" == *a* ]] && [ \"\$status\" -eq 0 ]" ]
+  [ "${lines[5]}" = "$d/x.bats:7:   [ -f x ] && [ -d y ] && [ ! -e z ]" ]
 }
 
 @test "shellcheck passes" {

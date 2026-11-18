@@ -9,7 +9,7 @@ teardown() { cleanup_sandbox; }
   [ "$status" -eq 2 ]
   [[ "$output" == *"--provider is required"* ]] || false
   [[ "$output" == *"claude"* && "$output" == *"codex"* && "$output" == *"opencode"* ]] || false
-  [ ! -e "$SANDBOX/.claude" ] && [ ! -e "$SANDBOX/.agents" ]
+  [ ! -e "$SANDBOX/.claude" ] && [ ! -e "$SANDBOX/.agents" ] || false
 }
 
 @test "--help prints usage and exits 0" {
@@ -49,8 +49,8 @@ teardown() { cleanup_sandbox; }
 @test "claude provider creates skills, agents, settings, CLAUDE.md" {
   run bash "$SANDBOX/setup.sh" --provider claude
   [ "$status" -eq 0 ]
-  [ -d "$SANDBOX/.claude/skills" ] && [ -L "$SANDBOX/.claude/skills" ]
-  [ -d "$SANDBOX/.claude/agents" ] && [ -L "$SANDBOX/.claude/agents" ]
+  [ -d "$SANDBOX/.claude/skills" ] && [ -L "$SANDBOX/.claude/skills" ] || false
+  [ -d "$SANDBOX/.claude/agents" ] && [ -L "$SANDBOX/.claude/agents" ] || false
   [ -s "$SANDBOX/.claude/settings.json" ]
   [ -s "$SANDBOX/CLAUDE.md" ]
   [ ! -e "$SANDBOX/.agents" ]
@@ -59,7 +59,7 @@ teardown() { cleanup_sandbox; }
 @test "codex and opencode link .agents/skills" {
   run bash "$SANDBOX/setup.sh" --provider codex,opencode
   [ "$status" -eq 0 ]
-  [ -L "$SANDBOX/.agents/skills" ] && [ -d "$SANDBOX/.agents/skills" ]
+  [ -L "$SANDBOX/.agents/skills" ] && [ -d "$SANDBOX/.agents/skills" ] || false
   [ ! -e "$SANDBOX/.claude" ]
 }
 

@@ -127,7 +127,7 @@ teardown() { cleanup_sandbox; }
   run with_lib 'link ../skills .claude/skills'
   [ "$status" -eq 0 ]
   [ "$(grep -c 'mklink /J' "$FAKE_CALLS")" -eq 2 ]
-  [ -L "$SANDBOX/.claude/skills" ] && [ -d "$SANDBOX/.claude/skills" ]
+  [ -L "$SANDBOX/.claude/skills" ] && [ -d "$SANDBOX/.claude/skills" ] || false
 }
 
 @test "on windows, link to a file makes a symlink, not a junction" {
@@ -183,5 +183,5 @@ teardown() { cleanup_sandbox; }
   run with_lib 'conf_value "$ARNESS_ROOT/c.conf" a'
   [ "$output" = "$(printf '1\nx=y')" ]
   run with_lib 'conf_value "$ARNESS_ROOT/missing.conf" a'
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
 }

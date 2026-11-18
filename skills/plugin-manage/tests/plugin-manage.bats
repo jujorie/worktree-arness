@@ -68,7 +68,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
            "UNINSTALL $UNINSTALL_CMD"; do
     printf '%s\n' "$output" | grep -qxF -- "$l" || { echo "missing: $l"; false; }
   done
-  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -L "$SANDBOX/skills/demo-hello" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ]
+  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -L "$SANDBOX/skills/demo-hello" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ] || false
   [ -z "$(ls -A "$SANDBOX/plugins")" ]
 }
 
@@ -135,7 +135,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   [ -f "$SANDBOX/plugins/demo/installed.flag" ]
   [ "$(git -C "$SANDBOX/plugins/demo" rev-parse HEAD)" = "$(origin_head)" ]
   state | grep -qx "commit=$(origin_head)"
-  state | grep -qx 'ref=main' && state | grep -qx 'kind=branch' && state | grep -qx 'status=ok'
+  state | grep -qx 'ref=main' && state | grep -qx 'kind=branch' && state | grep -qx 'status=ok' || false
   [[ "$output" == *"MANUAL opencode bash demo-tool *"* ]] || false
   [[ "$output" == *"MANUAL opencode skill demo-hello"* ]] || false
 }
@@ -193,7 +193,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   run "$SCRIPT" apply add --commit "$(git -C "$ORIGIN" rev-parse v0.1.0)" --ref v0.1.0 "$URL"
   [ "$status" -eq 0 ]
   grep -qx 'version=0.1.0' "$SANDBOX/plugins/demo/arness-plugin.conf"
-  state | grep -qx 'ref=v0.1.0' && state | grep -qx 'kind=tag'
+  state | grep -qx 'ref=v0.1.0' && state | grep -qx 'kind=tag' || false
 }
 
 @test "apply add with a commit other than the plan's is a MISMATCH" {
@@ -288,20 +288,20 @@ check_with() {
 
 @test "check rejects unknown, repeated and malformed lines with their number" {
   check_with 'colour=blue'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: unknown key colour" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: unknown key colour" ] || false
   check_with 'name=other'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: duplicate key name" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: duplicate key name" ] || false
   check_with 'just words'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: not KEY=value" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: not KEY=value" ] || false
 }
 
 @test "check rejects a missing manifest and an unsupported contract" {
   rm "$ORIGIN/arness-plugin.conf"
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST missing arness-plugin.conf" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST missing arness-plugin.conf" ] || false
   write_conf; edit_conf 's/^arness=.*/arness=2/'
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "ARNESS_VERSION 2" ]
+  [ "$status" -eq 4 ] && [ "$output" = "ARNESS_VERSION 2" ] || false
 }
 
 @test "check accepts rules for a provided command and none for a required one" {
@@ -312,7 +312,7 @@ check_with() {
   write_conf; edit_conf 's/^requires=.*/requires=git true/'
   printf '%s\n' 'allow.claude=Bash(true --version)' >> "$ORIGIN/arness-plugin.conf"
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(true --version): true is not in provides" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(true --version): true is not in provides" ] || false
 }
 
 @test "check rejects every rule outside the allowed shapes" {
@@ -340,16 +340,16 @@ check_with() {
   done
   write_conf; edit_conf 's/^provides=.*/provides=python3/'
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST provides: python3 runs arbitrary code" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST provides: python3 runs arbitrary code" ] || false
 }
 
 @test "check rejects a rule for a command the plugin does not provide, required ones included" {
   check_with 'allow.opencode=rm *'
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE opencode rm *: rm is not in provides" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE opencode rm *: rm is not in provides" ] || false
   write_conf; edit_conf 's/^requires=.*/requires=git rm/'
   printf '%s\n' 'allow.claude=Bash(rm -rf /)' >> "$ORIGIN/arness-plugin.conf"
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(rm -rf /): rm is not in provides" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_RULE claude Bash(rm -rf /): rm is not in provides" ] || false
 }
 
 @test "the example manifest in plugins/README.md passes check" {
@@ -376,14 +376,14 @@ check_with() {
   printf -- '---\nname: hello\n---\n' > "$ORIGIN/skills/hello/SKILL.md"
   write_conf; edit_conf 's/^skills=.*/skills=hello/'
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST skills: hello lacks prefix demo-" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST skills: hello lacks prefix demo-" ] || false
   write_conf
   printf -- '---\nname: other\n---\n' > "$ORIGIN/skills/demo-hello/SKILL.md"
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "INVALID skills/demo-hello/SKILL.md lacks 'name: demo-hello'" ]
+  [ "$status" -eq 4 ] && [ "$output" = "INVALID skills/demo-hello/SKILL.md lacks 'name: demo-hello'" ] || false
   rm "$ORIGIN/skills/demo-hello/SKILL.md"
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "INVALID skills/demo-hello/SKILL.md not found" ]
+  [ "$status" -eq 4 ] && [ "$output" = "INVALID skills/demo-hello/SKILL.md not found" ] || false
 }
 
 @test "check rejects an agent whose frontmatter name differs" {
@@ -396,11 +396,11 @@ check_with() {
 @test "check rejects names with glob or path characters, and bad version, name or prefix" {
   write_conf; edit_conf 's/^skills=.*/skills=..\/x */'
   run "$SCRIPT" check "$ORIGIN"
-  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST skills: names must be lowercase slugs" ]
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST skills: names must be lowercase slugs" ] || false
   for line in 's/^version=.*/version=1.0/' 's/^name=.*/name=Demo/' 's/^prefix=.*/prefix=demo/'; do
     write_conf; edit_conf "$line"
     run "$SCRIPT" check "$ORIGIN"
-    [ "$status" -eq 4 ] && [[ "$output" == "BAD_MANIFEST "* ]]
+    [ "$status" -eq 4 ] && [[ "$output" == "BAD_MANIFEST "* ]] || false
   done
 }
 
@@ -430,9 +430,9 @@ check_with() {
   run "$SCRIPT" apply update --commit "$new" --ref main demo
   [ "$status" -eq 0 ]
   [ "$(last_line)" = "UPDATED demo $old $new" ]
-  [ ! -e "$SANDBOX/agents/demo-helper.md" ] && [ ! -L "$SANDBOX/agents/demo-helper.md" ]
+  [ ! -e "$SANDBOX/agents/demo-helper.md" ] && [ ! -L "$SANDBOX/agents/demo-helper.md" ] || false
   [ -L "$SANDBOX/skills/demo-hello" ]
-  state | grep -qx 'version=0.2.0' && state | grep -qx "commit=$new"
+  state | grep -qx 'version=0.2.0' && state | grep -qx "commit=$new" || false
 }
 
 @test "apply update refuses to run without --commit" {
@@ -470,7 +470,7 @@ check_with() {
   [[ "$(last_line)" == "CONFIRM_UPDATE demo "*" $target v0.10.0" ]] || false
   run "$SCRIPT" apply update --commit "$target" --ref v0.10.0 demo
   [ "$status" -eq 0 ]
-  state | grep -qx 'ref=v0.10.0' && state | grep -qx 'kind=tag' && state | grep -qx 'version=0.10.0'
+  state | grep -qx 'ref=v0.10.0' && state | grep -qx 'kind=tag' && state | grep -qx 'version=0.10.0' || false
 }
 
 @test "apply update never creates or resets a local branch" {
@@ -552,7 +552,7 @@ check_with() {
   [ "$status" -eq 0 ]
   [ "$(last_line)" = "REMOVED demo" ]
   [ -f "$BATS_TEST_TMPDIR/uninstalled.flag" ]
-  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ]
+  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ] || false
   [ -z "$(ls -A "$SANDBOX/skills" | grep -v plugin-manage || true)" ]
   [ -z "$(ls -A "$SANDBOX/agents")" ]
   [ "$(cat "$SANDBOX/.claude/settings.json")" = "$before" ]
@@ -566,7 +566,7 @@ check_with() {
   [ "$status" -eq 11 ]
   run "$SCRIPT" apply remove --force demo
   [ "$status" -eq 0 ]
-  [ -f "$BATS_TEST_TMPDIR/uninstalled.flag" ] && [ ! -e "$BATS_TEST_TMPDIR/evil.flag" ]
+  [ -f "$BATS_TEST_TMPDIR/uninstalled.flag" ] && [ ! -e "$BATS_TEST_TMPDIR/evil.flag" ] || false
   [ ! -e "$SANDBOX/plugins/demo" ]
 }
 
