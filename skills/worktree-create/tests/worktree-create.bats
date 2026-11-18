@@ -213,8 +213,8 @@ cfg() { mkdir -p "$(dirname "$ARNESS_ROOT/config/$1/$2")"; printf '%s' "$3" > "$
   run "$SCRIPT" --name feat/x --no-confirm
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "CREATED $ARNESS_ROOT/worktrees/a/feat/x main" ]
-  [[ "$output" == *"CONFIG COPIED src/test.js"* ]]
-  [[ "$output" == *"CONFIG DONE "*"files=1 install=yes" ]]
+  [[ "$output" == *"CONFIG COPIED src/test.js"* ]] || false
+  [[ "$output" == *"CONFIG DONE "*"files=1 install=yes" ]] || false
   [ "$(cat "$ARNESS_ROOT/worktrees/a/feat/x/src/test.js")" = "v=1" ]
   [ -f "$ARNESS_ROOT/worktrees/a/feat/x/installed.txt" ]
 }
@@ -242,8 +242,8 @@ cfg() { mkdir -p "$(dirname "$ARNESS_ROOT/config/$1/$2")"; printf '%s' "$3" > "$
   cfg a install.sh 'exit 3'
   run "$SCRIPT" --name w --no-confirm
   [ "$status" -eq 14 ]
-  [[ "$output" == *"CONFIG INSTALL_FAILED 3"* ]]
-  [[ "$output" == *"CONFIG_FAILED 7" ]]
+  [[ "$output" == *"CONFIG INSTALL_FAILED 3"* ]] || false
+  [[ "$output" == *"CONFIG_FAILED 7" ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/w" ]
   [ -f "$ARNESS_ROOT/worktrees/a/w/keep.txt" ]
 }
@@ -295,7 +295,7 @@ mk_clone() {
   mk_clone a
   run "$SCRIPT" --name w --branch epic/NOPE
   [ "$status" -eq 2 ]
-  [[ "$output" == *"branch not found"* ]]
+  [[ "$output" == *"branch not found"* ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/w" ]
 }
 
@@ -346,8 +346,8 @@ origin_commit() {
   git -C "$SRC/a" remote set-url origin "$TMP/does-not-exist"
   run "$SCRIPT" --name w
   [ "$status" -eq 11 ]
-  [[ "$output" == *"warning: could not refresh origin/main"* ]]
-  [[ "$output" == *"CONFIRM_BRANCH main" ]]
+  [[ "$output" == *"warning: could not refresh origin/main"* ]] || false
+  [[ "$output" == *"CONFIRM_BRANCH main" ]] || false
 }
 
 @test "the user can pick origin/<branch> after seeing behind" {
@@ -363,7 +363,7 @@ origin_commit() {
   git -C "$SRC/a" remote set-url origin "$TMP/does-not-exist"
   run "$SCRIPT" --name w --no-confirm
   [ "$status" -eq 0 ]
-  [[ "$output" != *warning* ]]
+  [[ "$output" != *warning* ]] || false
 }
 
 @test "--branch origin/<b> refreshes it first; --no-fetch uses the local copy" {
@@ -501,7 +501,7 @@ origin_commit() {
   mk_clone a
   run "$SCRIPT" --detach --branch origin/epic/NOPE
   [ "$status" -eq 2 ]
-  [[ "$output" == *"branch not found"* ]]
+  [[ "$output" == *"branch not found"* ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/epic/NOPE" ]
 }
 
@@ -539,8 +539,8 @@ origin_commit() {
   touch "$SRC/a/.git/config.lock"
   run "$SCRIPT" --name feat/one --no-confirm
   [ "$status" -eq 3 ]
-  [[ "$output" == *"holds .git/config.lock"* ]]
-  [[ "$output" == *"worktree-config"* ]]
+  [[ "$output" == *"holds .git/config.lock"* ]] || false
+  [[ "$output" == *"worktree-config"* ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/feat/one" ]
-  [[ "$output" != *"CREATED"* ]]
+  [[ "$output" != *"CREATED"* ]] || false
 }
