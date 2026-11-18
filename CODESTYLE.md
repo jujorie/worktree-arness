@@ -104,6 +104,7 @@ An entry moves up into a step of the `SKILL.md` when it is seen to be general, n
 - Each test builds its own world in `mktemp -d` (`ARNESS_ROOT`, throwaway git repos) and removes it in `teardown`. No real network, no real remotes, no writes outside the temp dir.
 - Cover the failure paths and the unsafe inputs, not only the happy path.
 - On macOS, also run them with the system bash 3.2, which `#!/usr/bin/env bash` skips when a newer bash is installed: `PATH=/bin:/usr/bin:$PATH ./scripts/test.sh`.
+- In bash 3.2 a failing `[[ ]]` that is not the last command of a test does not stop it, and neither does a bare `! cmd` in any bash, so the test passes: end the line with `|| false` (`[[ "$output" == *x* ]] || false`, `! grep -q x f || false`), or use `run` and check `$status`. `tests/repo.bats` fails on a lone `[[ ]]` or `! cmd` line without it.
 - Helper functions are `snake_case` and go at the top of the file, or in `tests/helpers.bash` when shared.
 
 ## Docs and examples
