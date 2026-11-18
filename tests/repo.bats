@@ -21,31 +21,53 @@ shared_bats_files() {
 }
 
 # Prints file:line of each assertion that cannot fail the test, without a trailing
-# `|| false`: a lone `[[ ... ]]` (bash 3.2 ignores it for errexit), a bare `! cmd`
-# (no bash stops on it) and a list of `[ ... ]` / `[[ ... ]]` checks joined with `&&`
-# (no bash stops when one that is not the last fails). Lines continued with `\` are
-# joined first and heredoc bodies are skipped. if/while conditions, lines with `||`
+# `|| false`: a lone `[[ ... ]]` or `(( ... ))` (bash 3.2 ignores them for errexit),
+# a bare `! cmd` (no bash stops on it) and a list of `[ ... ]` / `[[ ... ]]` /
+# `(( ... ))` checks joined with `&&` (no bash stops when one that is not the last
+# fails). The rules look at the line without its quoted strings and trailing comment.
+# Lines continued with `\` are joined first and heredoc bodies are skipped; a heredoc
+# still open at the end of a file is reported. if/while conditions, lines with `||`
 # and `&&` lists that run something other than a check are not matched.
 silent_assertions() {
   awk '
-    function check_list(s,   n, i, p) {
+    # The line without quoted strings and trailing comment; a quoted heredoc
+    # delimiter (<<"EOF", or in single quotes) is unquoted first so it survives.
+    function clean(s,   w) {
+      while (match(s, /<<-?[ \t]*["\047][A-Za-z_][A-Za-z0-9_]*["\047]/)) {
+        w = substr(s, RSTART, RLENGTH); gsub(/["\047 \t-]/, "", w)
+        s = substr(s, 1, RSTART - 1) w substr(s, RSTART + RLENGTH)
+      }
       gsub(/"([^"\\]|\\.)*"/, "\"\"", s); gsub(/\047[^\047]*\047/, "\047\047", s)
+      sub(/(^|[ \t])#.*$/, "", s)
+      return s
+    }
+    function is_check(s) {
+      return s ~ /^[ \t]*(\[\[? .*\]\]?|\(\(.*\)\))[ \t]*$/
+    }
+    function check_list(s,   n, i, p) {
       if (s !~ /&&/ || s ~ /\|\|/) return 0
       n = split(s, p, /&&/)
-      for (i = 1; i <= n; i++) if (p[i] !~ /^[ \t]*\[\[? .*\]\]?[ \t]*$/) return 0
+      for (i = 1; i <= n; i++) if (!is_check(p[i])) return 0
       return 1
     }
+    function unterminated() { if (tag != "") print file ": unterminated heredoc " tag }
+    FNR == 1 { unterminated(); tag = ""; line = ""; file = FILENAME }
     tag != "" { if ($0 ~ "^[ \t]*" tag "[ \t]*$") tag = ""; next }
-    /<<-?[ \t]*["\047]?[A-Za-z_]/ && !/<<</ {
-      tag = $0; sub(/.*<<-?[ \t]*["\047]?/, "", tag); sub(/[^A-Za-z0-9_].*$/, "", tag)
+    {
+      c = clean($0)
+      if (c ~ /<<-?[ \t]*[A-Za-z_]/ && c !~ /<<</) {
+        tag = c; sub(/.*<<-?[ \t]*/, "", tag); sub(/[^A-Za-z0-9_].*$/, "", tag)
+      }
+      line = line $0
     }
-    { line = line $0 }
     /\\$/ { sub(/\\$/, "", line); next }
     {
-      if (line ~ /^[ \t]*\[\[.*\]\][ \t]*$/ || (line ~ /^[ \t]*! / && line !~ /\|\| false[ \t]*$/) || check_list(line))
+      c = clean(line)
+      if (c ~ /^[ \t]*(\[\[.*\]\]|\(\(.*\)\))[ \t]*$/ || (c ~ /^[ \t]*! / && c !~ /\|\|/) || check_list(c))
         print FILENAME ":" FNR ": " line
       line = ""
     }
+    END { unterminated() }
   ' "$@"
 }
 
@@ -95,8 +117,15 @@ silent_assertions() {
   [ "$status" -eq 0 ] && [[ "$output" == *a* ]]
   [[ "$output" == *a* ]] && [ "$status" -eq 0 ]
   [ -f x ] && [ -d y ] && [ ! -e z ]
+  [[ "$output" == *a* ]]  # c
+  (( x > 1 ))
+  [ -n "$x" ] && (( x > 1 ))
   [[ "$output" == *a* ]] || false
   ! grep -q a f || false
+  ! grep -q a f || { echo no; false; }
+  ! grep -q a f || false  # c
+  (( x > 1 )) || false
+  [[ "$output" == "a # b" ]] || false
   ! grep -q a \
       f || false
   if [[ "$output" == *a* ]]; then :; fi
@@ -118,13 +147,42 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 6 ]
+  [ "${#lines[@]}" -eq 9 ]
   [ "${lines[0]}" = "$d/x.bats:1:   [[ \"\$output\" == *a* ]]" ]
   [ "${lines[1]}" = "$d/x.bats:2:   ! grep -q a f" ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
   [ "${lines[3]}" = "$d/x.bats:5:   [ \"\$status\" -eq 0 ] && [[ \"\$output\" == *a* ]]" ]
   [ "${lines[4]}" = "$d/x.bats:6:   [[ \"\$output\" == *a* ]] && [ \"\$status\" -eq 0 ]" ]
   [ "${lines[5]}" = "$d/x.bats:7:   [ -f x ] && [ -d y ] && [ ! -e z ]" ]
+  [ "${lines[6]}" = "$d/x.bats:8:   [[ \"\$output\" == *a* ]]  # c" ]
+  [ "${lines[7]}" = "$d/x.bats:9:   (( x > 1 ))" ]
+  [ "${lines[8]}" = "$d/x.bats:10:   [ -n \"\$x\" ] && (( x > 1 ))" ]
+}
+
+@test "the silent assertion check skips no file after a heredoc look-alike and fails on an unterminated one" {
+  d="$(mktemp -d)"
+  printf '  # cat <<EOF\n  [[ a ]]\n' > "$d/a.bats"
+  printf '  [[ b ]]\n' > "$d/b.bats"
+  printf '  echo "<<EOF"\n  [[ c ]]\n  cat <<EOF\n' > "$d/c.bats"
+  printf '  [[ d ]]\n' > "$d/d.bats"
+  run silent_assertions "$d/a.bats" "$d/b.bats" "$d/c.bats" "$d/d.bats"
+  rm -rf "$d"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 5 ]
+  [ "${lines[0]}" = "$d/a.bats:2:   [[ a ]]" ]
+  [ "${lines[1]}" = "$d/b.bats:1:   [[ b ]]" ]
+  [ "${lines[2]}" = "$d/c.bats:2:   [[ c ]]" ]
+  [ "${lines[3]}" = "$d/c.bats: unterminated heredoc EOF" ]
+  [ "${lines[4]}" = "$d/d.bats:1:   [[ d ]]" ]
+}
+
+@test "the silent assertion check reports a heredoc left open at the end of the last file" {
+  d="$(mktemp -d)"
+  printf '  cat <<'\''EOF'\''\n  [[ a ]]\n' > "$d/a.bats"
+  run silent_assertions "$d/a.bats"
+  rm -rf "$d"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$d/a.bats: unterminated heredoc EOF" ]
 }
 
 @test "shellcheck passes" {
