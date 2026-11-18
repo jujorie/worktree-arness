@@ -147,7 +147,7 @@ silent_assertions() {
   run silent_assertions $(shared_bats_files)
   [ "$status" -eq 0 ]
   [ -z "$output" ] || {
-    echo "end each file:line assertion with || false (write control flow as if), and close each unterminated heredoc or || { block:"
+    echo "end each file:line assertion with || false, with no ; outside quotes and checks (write control flow as if), and close each unterminated heredoc or || { block:"
     echo "$output"; false
   }
 }
@@ -226,6 +226,11 @@ silent_assertions() {
     echo "$output"; false  # d
   }
   [[ "$output" == *z* ]]
+  [[ -n "$a" ]] || { echo no; return 0; }
+  ! grep -q a f || { exit 0; }
+  [ -f x ] || return
+  [ -f x ] || continue
+  [ -f x ] || exit 1
   cat > f <<'IN'
   [[ heredoc text, not an assertion ]]
   ! neither is this
@@ -234,7 +239,7 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 51 52 53 54 55 58 64 71 " ]
+  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 51 52 53 54 55 58 64 71 72 73 " ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
   [ "${lines[8]}" = "$d/x.bats:10:   [[ \"\$output\" == *a* ]]  # c" ]
 }
