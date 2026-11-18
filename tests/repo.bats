@@ -23,7 +23,8 @@ shared_bats_files() {
 # Prints file:line of each assertion that cannot fail the test. One rule: a line that
 # starts with `[`, `[[`, `((` or `!` is an assertion and must end with `|| false` (or
 # a `|| { ...; false; }` block, `return N`/`exit N` with N > 0 also count, on one line
-# or several); control flow is written as `if`. A `;` outside quotes, `[[ ]]`, `(( ))`,
+# or several), with only checks joined by `||` before it (`|| echo` in between makes
+# it never run); control flow is written as `if`. A `;` outside quotes, `[[ ]]`, `(( ))`,
 # `$( )` and that block always flags the line. The only exception is a lone `[ ... ]`
 # with no `&&` or `;`, a plain command that fails the test in every bash, alone or
 # with each `||` followed by `[ ... ]`, `skip`, `return`, `continue` or `exit`.
@@ -73,7 +74,13 @@ silent_assertions() {
       # A final block counts as || false only when it ends in a command that fails.
       sub(/\|\|[ \t]*\{([^{}]*;)?[ \t]*(false|return[ \t]+[1-9][0-9]*|exit[ \t]+[1-9][0-9]*)[ \t]*;?[ \t]*\}[ \t]*$/, "|| false", s)
       if (s ~ /;/) return 1
-      if (s ~ /\|\|[ \t]*false[ \t]*$/) return 0
+      # Before the final || false, every || part must be a check: `|| echo` in between
+      # always succeeds, so the || false after it never runs.
+      if (s ~ /\|\|[ \t]*false[ \t]*$/) {
+        n = split(s, p, /\|\|/)
+        for (i = 2; i < n; i++) if (p[i] !~ /^[ \t]*(\[|\(\(|![ \t])/) return 1
+        return 0
+      }
       if (s !~ /^[ \t]*\[[ \t]/ || s ~ /&&/) return 1
       # A lone [ ], alone or with each || followed by another [ ] or skip/return/continue/exit.
       n = split(s, p, /\|\|/)
@@ -95,7 +102,7 @@ silent_assertions() {
       }
       line = line $0; cl = cl c
     }
-    /\\$/ { sub(/\\$/, "", line); sub(/\\$/, "", cl); next }
+    c ~ /\\$/ { sub(/\\$/, "", line); sub(/\\$/, "", cl); next }
     cl ~ /(&&|\|)[ \t]*$/ { next }
     # A `|| {` block written over several lines is joined, with `;`, up to its `}`.
     {
@@ -147,7 +154,7 @@ silent_assertions() {
   run silent_assertions $(shared_bats_files)
   [ "$status" -eq 0 ]
   [ -z "$output" ] || {
-    echo "end each file:line assertion with || false, with no ; outside quotes and checks (write control flow as if), and close each unterminated heredoc or || { block:"
+    echo "make each file:line assertion a list of checks ([, [[, ((, !) ending in || false, with no other command between them and no ; outside quotes and checks (write control flow and messages as if), and close each unterminated heredoc or || { block:"
     echo "$output"; false
   }
 }
@@ -231,6 +238,11 @@ silent_assertions() {
   [ -f x ] || return
   [ -f x ] || continue
   [ -f x ] || exit 1
+  [ "$status" -eq 0 ] || echo "$output" || false
+  [[ -n "$a" ]] || echo no || { echo; false; }
+  [[ -n "$a" ]] || [[ -n "$b" ]] || false
+  run cmd  # x \
+  [[ "$output" == *a* ]]
   cat > f <<'IN'
   [[ heredoc text, not an assertion ]]
   ! neither is this
@@ -239,7 +251,7 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 51 52 53 54 55 58 64 71 72 73 " ]
+  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 51 52 53 54 55 58 64 71 72 73 77 78 81 " ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
   [ "${lines[8]}" = "$d/x.bats:10:   [[ \"\$output\" == *a* ]]  # c" ]
 }
