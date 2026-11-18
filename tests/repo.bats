@@ -13,6 +13,34 @@ skill_scripts() {
   while IFS= read -r d; do ls "$d"scripts/*.sh 2>/dev/null || true; done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
+# Bats files of the repo and of the shared skills (local skills are not checked).
+shared_bats_files() {
+  local d
+  ls "$REPO_ROOT"/tests/*.bats
+  while IFS= read -r d; do ls "$d"tests/*.bats 2>/dev/null || true; done < <(shared_skill_dirs "$REPO_ROOT")
+}
+
+# Prints file:line of each assertion that cannot fail the test: a lone `[[ ... ]]`
+# (bash 3.2 ignores it for errexit) or a bare `! cmd` (no bash stops on it) without
+# a trailing `|| false`. Lines continued with `\` are joined first and heredoc bodies
+# are skipped. Lines where `[[` is inside an if/while or an &&/|| list outside the
+# brackets are not matched.
+silent_assertions() {
+  awk '
+    tag != "" { if ($0 ~ "^[ \t]*" tag "[ \t]*$") tag = ""; next }
+    /<<-?[ \t]*["\047]?[A-Za-z_]/ && !/<<</ {
+      tag = $0; sub(/.*<<-?[ \t]*["\047]?/, "", tag); sub(/[^A-Za-z0-9_].*$/, "", tag)
+    }
+    { line = line $0 }
+    /\\$/ { sub(/\\$/, "", line); next }
+    {
+      if (line ~ /^[ \t]*\[\[.*\]\][ \t]*$/ || (line ~ /^[ \t]*! / && line !~ /\|\| false[ \t]*$/))
+        print FILENAME ":" FNR ": " line
+      line = ""
+    }
+  ' "$@"
+}
+
 @test "every script has a bash shebang and LF endings" {
   # entry points only: scripts/lib.sh is sourced, not executed
   for f in "$REPO_ROOT"/setup.sh "$REPO_ROOT"/providers/*/setup.sh $(skill_scripts); do
@@ -41,6 +69,43 @@ skill_scripts() {
 @test "no GNU-only flags in scripts" {
   ! grep -nE 'readlink -f|sed -i|date -d|grep -P|mapfile|readarray' \
       $(all_scripts) || false
+}
+
+@test "no bats assertion is silent in bash 3.2" {
+  run silent_assertions $(shared_bats_files)
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "end these lines with || false:"; echo "$output"; false; }
+}
+
+@test "the silent assertion check flags lone [[ and bare !, and nothing else" {
+  d="$(mktemp -d)"
+  cat > "$d/x.bats" <<'EOF'
+  [[ "$output" == *a* ]]
+  ! grep -q a f
+  ! grep -q a \
+      f
+  [[ "$output" == *a* ]] || false
+  ! grep -q a f || false
+  ! grep -q a \
+      f || false
+  if [[ "$output" == *a* ]]; then :; fi
+  while [[ -n "$x" ]]; do :; done
+  [ "$status" -eq 0 ] && [[ "$output" == *a* ]]
+  [[ "$output" == *a* ]] && [ "$status" -eq 0 ]
+  [[ "$output" == *a* ]] || { echo no; false; }
+  [[ "$output" == *a* && "$output" == *b* ]] || false
+  cat > f <<'IN'
+  [[ heredoc text, not an assertion ]]
+  ! neither is this
+IN
+EOF
+  run silent_assertions "$d/x.bats"
+  rm -rf "$d"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = "$d/x.bats:1:   [[ \"\$output\" == *a* ]]" ]
+  [ "${lines[1]}" = "$d/x.bats:2:   ! grep -q a f" ]
+  [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
 }
 
 @test "shellcheck passes" {
