@@ -79,8 +79,9 @@ WAIT_TIMEOUT=540
 # exit code (via a .tmp, so a reader never sees half a file; removed when the save fails) and exits with it.
 # Its command line has "npm run", so pid_alive knows it. The loop ends on the result of `wait`, never by
 # probing npm's pid (free once reaped): the trap sets s, so a wait cut short by a signal is waited again;
-# bash keeps a reaped child's status, so that wait still gives npm's code. The trap is off before the save,
-# so no signal reaches a pid that is no longer npm, nor cuts the save.
+# bash (3.2 and 5) keeps a reaped child's status, so that wait still gives npm's code. The trap goes off
+# right after the loop, before the save: a signal is forwarded to npm's pid after reaping it only in the few
+# commands between the last wait and that line (bash cannot close that window), and none cuts the save.
 # shellcheck disable=SC2016 # expanded by the wrapper bash, not here
 WRAPPER='c="$1"; shift; npm run "$@" & n=$!; trap "s=1; kill -TERM $n 2>/dev/null" TERM INT; while :; do s=0; wait "$n"; rc=$?; [ "$s" = 1 ] || break; done; trap "" TERM INT; { echo "$rc" > "$c.tmp" && mv -f "$c.tmp" "$c"; } || rm -f "$c.tmp"; exit "$rc"'
 
@@ -357,8 +358,8 @@ cmd_run() {
   done
 
   resolve_worktree "$want"
-  # Once, before any status below: every way this run ends (an error, a question, STARTED) leaves no code of
-  # an earlier run for wait to answer with.
+  # Before any status below: every way this run ends (an error, a question) leaves no code of an earlier run
+  # for wait to answer with. Again right before the start, below.
   if [ -n "$script" ]; then clear_old_code "$script"; fi
   # The .nvmrc node first in PATH, since npm may only be reachable through nvm. A version nvm lacks is
   # reported after the script checks (listing the scripts needs no node version) and before the install
@@ -399,6 +400,9 @@ cmd_run() {
   fi
 
   mkdir -p "$STATE"
+  # Once more, now that the script is known not to run: a run before that was still ending at the first
+  # clear may have saved its code since.
+  rm -f "$code_file" "$code_file.tmp"
   # Job control gives the job its own process group (pgid = pid), so stop can end the whole tree.
   set -m
   if [ "${#args[@]}" -gt 0 ]; then

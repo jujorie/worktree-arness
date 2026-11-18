@@ -697,7 +697,24 @@ signal_wrapper_only() {
   [[ "$output" != FINISHED* ]] || false
 }
 
-@test "the wrapper never uses npm's pid after reaping it: no kill -0 loop, trap off before saving" {
+@test "a code saved by the run before while this run starts is not taken as this run's result" {
+  add_script slow "sleep 2"
+  # An npm that, while run reads the scripts (after its first clear), plays the run before ending and
+  # saving code 7.
+  local real_npm
+  real_npm="$(command -v npm)"
+  mkdir -p "$TMP/npmbin" "$(state a/feat/x)"
+  printf '#!/usr/bin/env bash\nif [ "$1" = pkg ]; then echo 7 > "%s"; fi\nexec "%s" "$@"\n' \
+    "$(state a/feat/x)/slow.code" "$real_npm" > "$TMP/npmbin/npm"
+  chmod +x "$TMP/npmbin/npm"
+  PATH="$TMP/npmbin:$PATH" NPM_RUN_QUICK_TENTHS=1 run "$SCRIPT" run slow
+  [[ "$output" == "STARTED a/feat/x slow "* ]] || false
+  run "$SCRIPT" wait slow --timeout 10
+  [ "$status" -eq 0 ]
+  [ "$output" = "FINISHED a/feat/x slow 0 $(state a/feat/x)/slow.log" ]
+}
+
+@test "the wrapper ends its wait loop on wait's result and switches the trap off before saving" {
   run bash -c 'source "$1"; printf "%s\n" "$WRAPPER"' _ "$SCRIPT"
   [ "$status" -eq 0 ]
   [[ "$output" != *'kill -0'* ]] || false
