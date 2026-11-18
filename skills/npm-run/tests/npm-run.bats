@@ -99,7 +99,7 @@ teardown() {
   [ "$output" = "CHOOSE_WORKTREE a/feat/x a/feat/y b/PROJ-1" ]
   run "$SCRIPT" run --worktree b/PROJ-1 ok
   [ "$status" -eq 0 ]
-  [[ "$output" == "FINISHED b/PROJ-1 ok 0 "* ]]
+  [[ "$output" == "FINISHED b/PROJ-1 ok 0 "* ]] || false
 }
 
 @test "NO_WORKTREE without worktrees" {
@@ -189,7 +189,7 @@ teardown() {
   run "$SCRIPT" run --install ok
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "INSTALLED a/feat/x $(state a/feat/x)/install.log" ]
-  [[ "${lines[1]}" == "FINISHED a/feat/x ok 0 "* ]]
+  [[ "${lines[1]}" == "FINISHED a/feat/x ok 0 "* ]] || false
 }
 
 # --- running -------------------------------------------------------------------------
@@ -204,14 +204,14 @@ teardown() {
   run "$SCRIPT" run fail
   [ "$status" -eq 8 ]
   [ "${lines[0]}" = "FINISHED a/feat/x fail 3 $(state a/feat/x)/fail.log" ]
-  [[ "$output" == *boom* ]]
+  [[ "$output" == *boom* ]] || false
   [ ! -e "$(state a/feat/x)/fail.pid" ]
 }
 
 @test "a long script runs in the background with its pid saved" {
   run "$SCRIPT" run serve
   [ "$status" -eq 0 ]
-  [[ "$output" == "STARTED a/feat/x serve "* ]]
+  [[ "$output" == "STARTED a/feat/x serve "* ]] || false
   pid="$(cat "$(state a/feat/x)/serve.pid")"
   kill -0 "$pid"
 
@@ -283,7 +283,7 @@ EOF
 
   run env MSYS_NO_PATHCONV=1 "$SCRIPT" stop --worktree a/feat/x tree
   [ "$status" -eq 0 ]
-  [[ "$output" == "STOPPED a/feat/x tree "* ]]
+  [[ "$output" == "STOPPED a/feat/x tree "* ]] || false
   # 128: no such process. 0 would mean node was still alive (it is ended here, then).
   run env MSYS2_ARG_CONV_EXCL='*' taskkill /F /PID "$NODE_PID"
   [ "$status" -eq 128 ]
@@ -299,9 +299,9 @@ EOF
 
   PATH="$TMP/tkbin:$PATH" run "$SCRIPT" stop --worktree a/feat/x serve
   [ "$status" -eq 14 ]
-  [[ "$output" == *"STOP_FAILED a/feat/x serve $pid"* ]]
-  [[ "$output" == *"warning: taskkill could not end the process tree of $pid: access denied"* ]]
-  [[ "$output" != *"STOPPED"* ]]
+  [[ "$output" == *"STOP_FAILED a/feat/x serve $pid"* ]] || false
+  [[ "$output" == *"warning: taskkill could not end the process tree of $pid: access denied"* ]] || false
+  [[ "$output" != *"STOPPED"* ]] || false
   [ -e "$(state a/feat/x)/serve.pid" ]
   # The real taskkill ends it, and the pid kept lets stop do it.
   run "$SCRIPT" stop --worktree a/feat/x serve
@@ -326,7 +326,7 @@ EOF
   fake_cygpath ok
   run "$SCRIPT" run ok
   [ "$status" -eq 0 ]
-  [[ "$output" == "FINISHED a/feat/x ok 0 "* ]]
+  [[ "$output" == "FINISHED a/feat/x ok 0 "* ]] || false
   grep -q -- '^-m .*/worktrees/a/$' "$CYGPATH_LOG"
 }
 
@@ -334,8 +334,8 @@ EOF
   fake_cygpath fail
   run "$SCRIPT" run ok
   [ "$status" -eq 4 ]
-  [[ "$output" == *"warning: cygpath cannot convert "*"/worktrees/a/; a not listed"* ]]
-  [[ "$output" == *NO_WORKTREE ]]
+  [[ "$output" == *"warning: cygpath cannot convert "*"/worktrees/a/; a not listed"* ]] || false
+  [[ "$output" == *NO_WORKTREE ]] || false
 }
 
 @test "ps reports EXITED for a dead pid and forgets it" {
@@ -935,8 +935,8 @@ JSON
   run "$SCRIPT" run --install ver
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "NODE a/feat/x 22.17.1" ]
-  [[ "${lines[1]}" == "INSTALLED a/feat/x "* ]]
-  [[ "${lines[2]}" == "FINISHED a/feat/x ver 0 "* ]]
+  [[ "${lines[1]}" == "INSTALLED a/feat/x "* ]] || false
+  [[ "${lines[2]}" == "FINISHED a/feat/x ver 0 "* ]] || false
   grep -qx v22.17.1 "$(state a/feat/x)/ver.log"
 }
 
@@ -991,7 +991,7 @@ JSON
   run "$SCRIPT" run ver
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "NODE a/feat/x ${cur#v}" ]
-  [[ "${lines[1]}" == "FINISHED a/feat/x ver 0 "* ]]
+  [[ "${lines[1]}" == "FINISHED a/feat/x ver 0 "* ]] || false
 }
 
 @test ".nvmrc: NO_COMMAND and UNKNOWN_SCRIPT come before NO_NODE_VERSION" {
@@ -1056,16 +1056,16 @@ JSON
   echo 99.1 > "$(WT a/feat/x)/.nvmrc"
   run "$SCRIPT" run ver
   [ "$status" -eq 0 ]
-  [[ "$output" == *"warning: .nvmrc asks for node 99.1 and there is no nvm; using the current node "[0-9]* ]]
-  [[ "$output" == *"FINISHED a/feat/x ver 0 "* ]]
-  [[ "$output" != *NODE\ a/feat/x* ]]
+  [[ "$output" == *"warning: .nvmrc asks for node 99.1 and there is no nvm; using the current node "[0-9]* ]] || false
+  [[ "$output" == *"FINISHED a/feat/x ver 0 "* ]] || false
+  [[ "$output" != *NODE\ a/feat/x* ]] || false
   rm -f "$(state a/feat/x)/ver.log"
   # An nvm-windows install counts as nvm, even when its folder has no versions.
   export NVM_HOME="$TMP/nvm-windows-empty"
   mkdir -p "$NVM_HOME"
   run "$SCRIPT" run ver
   [ "$status" -eq 13 ]
-  [[ "$output" == *"NO_NODE_VERSION a/feat/x 99.1" ]]
+  [[ "$output" == *"NO_NODE_VERSION a/feat/x 99.1" ]] || false
   [ ! -e "$(state a/feat/x)/ver.log" ]
   # So does a fresh nvm with no version installed yet.
   unset NVM_HOME
@@ -1084,10 +1084,10 @@ JSON
   echo 'lts/*' > "$(WT a/feat/x)/.nvmrc"
   run "$SCRIPT" run ver
   [ "$status" -eq 0 ]
-  [[ "$output" == *"note: .nvmrc asks for 'lts/*', an alias npm-run does not resolve"* ]]
-  [[ "$output" == *"NODE_UNRESOLVED a/feat/x lts/*"* ]]
-  [[ "$output" == *"FINISHED a/feat/x ver 0 "* ]]
-  [[ "$output" != *"NODE a/feat/x"* ]]
+  [[ "$output" == *"note: .nvmrc asks for 'lts/*', an alias npm-run does not resolve"* ]] || false
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x lts/*"* ]] || false
+  [[ "$output" == *"FINISHED a/feat/x ver 0 "* ]] || false
+  [[ "$output" != *"NODE a/feat/x"* ]] || false
 }
 
 @test ".nvmrc: the NODE or NODE_UNRESOLVED line comes before the install question" {
@@ -1102,7 +1102,7 @@ JSON
   echo 'lts/*' > "$(WT a/feat/x)/.nvmrc"
   run "$SCRIPT" run ver
   [ "$status" -eq 11 ]
-  [[ "$output" == *"NODE_UNRESOLVED a/feat/x lts/*"*"CONFIRM_INSTALL a/feat/x" ]]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x lts/*"*"CONFIRM_INSTALL a/feat/x" ]] || false
 }
 
 @test ".nvmrc: only the first field counts, and v or .x alone is not a version" {
@@ -1116,11 +1116,11 @@ JSON
   echo v > "$(WT a/feat/x)/.nvmrc"
   run "$SCRIPT" run ver
   [ "$status" -eq 0 ]
-  [[ "$output" == *"NODE_UNRESOLVED a/feat/x v"$'\n'* ]]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x v"$'\n'* ]] || false
   echo .x > "$(WT a/feat/x)/.nvmrc"
   run "$SCRIPT" run ver
   [ "$status" -eq 0 ]
-  [[ "$output" == *"NODE_UNRESOLVED a/feat/x .x"$'\n'* ]]
+  [[ "$output" == *"NODE_UNRESOLVED a/feat/x .x"$'\n'* ]] || false
 }
 
 @test ".nvmrc: without npm in PATH, a version nvm lacks is reported first" {
