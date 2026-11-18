@@ -21,16 +21,19 @@ shared_bats_files() {
 }
 
 # Prints file:line of each assertion that cannot fail the test. One rule: a line that
-# starts with `[`, `[[`, `((` or `!` is an assertion and must have a `||` after its
-# checks (normally `|| false`; one inside `[[ ]]`, `(( ))` or `$( )` does not count);
-# control flow is written as `if`. The only exception is a lone `[ ... ]` with no `&&`,
-# a plain command that fails the test in every bash. if/elif/while/until conditions do
-# not start with those tokens, so they are never matched, and neither is a list that
-# starts with another command (`grep -q a f && grep -q b f`), by design. The rule looks
-# at the logical line: lines ending in `\`, `&&`, `||` or `|` joined with the next,
-# quoted strings and the trailing comment removed, heredoc bodies skipped (a heredoc
-# still open at the end of a file is reported). Known limit: an odd number of `"`
-# inside '...' can confuse the quote stripping.
+# starts with `[`, `[[`, `((` or `!` is an assertion and must end with `|| false` (or
+# `|| { ...; false; }`); control flow is written as `if`. A `;` outside quotes,
+# `[[ ]]`, `(( ))` and `$( )` always flags the line. The only exception is a lone
+# `[ ... ]` with no `&&` or `;`, a plain command that fails the test in every bash.
+# if/elif/while/until conditions do not start with those tokens, so they are never
+# matched, and neither is a list that starts with another command
+# (`grep -q a f && grep -q b f`), by design. The rule looks at the logical line: lines
+# ending in `\`, `&&`, `||` or `|` joined with the next, quoted strings and the
+# trailing comment removed, the inside of `[[ ]]`, `(( ))` and `$( )` emptied, heredoc
+# bodies skipped (a heredoc still open at the end of a file is reported).
+# Known limits: an odd number of `"` inside '...' can confuse the quote stripping; a
+# `]]`, `))` or `)` nested inside a check (`[[:digit:]]` inside `[[ ]]`) closes it too
+# early; and `( ... )` and `{ ... }` other than the final block are not emptied.
 silent_assertions() {
   awk '
     # The line without quoted strings and trailing comment; a quoted heredoc
@@ -59,7 +62,9 @@ silent_assertions() {
     function silent(s) {
       if (s !~ /^[ \t]*(\[|\(\(|![ \t])/) return 0
       s = blank(blank(blank(s, "$(", ")"), "[[", "]]"), "((", "))")
-      if (s ~ /\|\|/) return 0
+      sub(/\|\|[ \t]*\{.*\}[ \t]*$/, "|| false", s)
+      if (s ~ /;/) return 1
+      if (s ~ /\|\|[ \t]*false[ \t]*$/) return 0
       return !(s ~ /^[ \t]*\[[ \t]/ && s !~ /&&/)
     }
     function unterminated() { if (tag != "") print file ": unterminated heredoc " tag }
@@ -121,7 +126,7 @@ silent_assertions() {
   }
 }
 
-@test "the silent assertion check flags lines starting with [, [[, (( or ! without ||, and nothing else" {
+@test "the silent assertion check flags lines starting with [, [[, (( or ! that do not end in || false, and nothing else" {
   d="$(mktemp -d)"
   cat > "$d/x.bats" <<'EOF'
   [[ "$output" == *a* ]]
@@ -168,6 +173,12 @@ silent_assertions() {
     [ -n "$b" ] || false
   if [[ -n "$a" ]] &&
      [[ -n "$b" ]]; then :; fi
+  [[ "$output" == a ]] || [[ "$output" == b ]]
+  ! grep -q a f || ! grep -q b f
+  [[ -n "$a" ]] || false && [[ -n "$b" ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *a* ]]
+  [ -n "$a" ] || [ -n "$b" ]
+  [[ -n "$a" ]] || { echo no; false; }
   cat > f <<'IN'
   [[ heredoc text, not an assertion ]]
   ! neither is this
@@ -176,7 +187,7 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 " ]
+  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 " ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
   [ "${lines[8]}" = "$d/x.bats:10:   [[ \"\$output\" == *a* ]]  # c" ]
 }
