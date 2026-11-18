@@ -188,7 +188,7 @@ teardown() { chmod -R u+w "$TMP" 2>/dev/null || true; rm -rf "$TMP"; }
   merge_wt a done
   run "$SCRIPT" remove --source a done
   [ "$status" -eq 0 ]
-  [[ "$output" == REMOVED*/worktrees/a/done ]]
+  [[ "$output" == REMOVED*/worktrees/a/done ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/done" ]
   [ -z "$(git -C "$SRC/a" branch --list done)" ]
   [ -z "$(git -C "$SRC/a" worktree list --porcelain | grep 'worktrees/a/done' || true)" ]
@@ -261,8 +261,8 @@ EOF
   fake_git_remove left-behind
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"note: git left "*"/worktrees/a/feat/x behind"* ]]
-  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [[ "$output" == *"note: git left "*"/worktrees/a/feat/x behind"* ]] || false
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
   [ -d "$ARNESS_ROOT/worktrees/a" ]
   [ -z "$(git -C "$SRC/a" branch --list feat/x)" ]
@@ -276,8 +276,8 @@ EOF
   fake_git_remove left-link
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"note: git left "*"/worktrees/a/feat/x behind"* ]]
-  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [[ "$output" == *"note: git left "*"/worktrees/a/feat/x behind"* ]] || false
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
   [ -d "$ARNESS_ROOT/worktrees/a" ]
   [ -f "$TMP/outside/keep.txt" ]
@@ -295,7 +295,7 @@ EOF
     "$(cygpath -w "$TMP/outside")" >/dev/null
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
   [ -f "$TMP/outside/keep.txt" ]
 }
@@ -306,7 +306,7 @@ EOF
   fake_git_remove still-listed
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]] || false
   [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
   [ -n "$(git -C "$SRC/a" branch --list feat/x)" ]
 }
@@ -317,8 +317,8 @@ EOF
   fake_git_remove list-fails
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]]
-  [[ "$output" != *"note: git left"* ]]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]] || false
+  [[ "$output" != *"note: git left"* ]] || false
   [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
 }
 
@@ -330,8 +330,8 @@ EOF
   fake_git_remove held
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ rm-failed ]]
-  [[ "$output" != *REMOVED* ]]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ rm-failed ]] || false
+  [[ "$output" != *REMOVED* ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/feat/x" ]
   [ -z "$(git -C "$SRC/a" branch --list feat/x)" ]
   [ -z "$(git -C "$SRC/a" worktree list --porcelain | grep "/worktrees/a/feat/x$")" ]
@@ -343,8 +343,8 @@ EOF
   fake_git_remove still-listed-big
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]]
-  [[ "$output" != *"note: git left"* ]]
+  [[ "$output" == *SKIPPED*/worktrees/a/feat/x\ git-failed ]] || false
+  [[ "$output" != *"note: git left"* ]] || false
   [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
 }
 
@@ -357,7 +357,7 @@ EOF
   [ "$(col feat/x 1)" = a ]
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]]
+  [[ "$output" == *REMOVED*/worktrees/a/feat/x ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/feat" ]
   [ -d "$ARNESS_ROOT/worktrees/a" ]
   grep -q -- '^-m .*/worktrees/a/$' "$CYGPATH_LOG"
@@ -370,8 +370,8 @@ EOF
   fake_cygpath fail
   run "$SCRIPT" list --no-fetch
   [ "$status" -eq 0 ]
-  [[ "$output" == *"warning: cygpath cannot convert "*"/worktrees/a/; a not listed"* ]]
-  [[ "$output" == *NONE ]]
+  [[ "$output" == *"warning: cygpath cannot convert "*"/worktrees/a/; a not listed"* ]] || false
+  [[ "$output" == *NONE ]] || false
 }
 
 @test "remove stops with an error when cygpath cannot convert the worktrees dir" {
@@ -380,7 +380,7 @@ EOF
   fake_cygpath fail
   run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 2 ]
-  [[ "$output" == *"error: cygpath cannot convert "*"/worktrees/a"* ]]
+  [[ "$output" == *"error: cygpath cannot convert "*"/worktrees/a"* ]] || false
   [ -f "$ARNESS_ROOT/worktrees/a/feat/x/f.txt" ]
   [ -n "$(git -C "$SRC/a" branch --list feat/x)" ]
 }
@@ -399,7 +399,7 @@ EOF
   mk_wt a open commit
   run "$SCRIPT" remove --source a open
   [ "$status" -eq 13 ]
-  [[ "$output" == SKIPPED*/worktrees/a/open\ NOT_MERGED ]]
+  [[ "$output" == SKIPPED*/worktrees/a/open\ NOT_MERGED ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/open" ]
   [ -n "$(git -C "$SRC/a" branch --list open)" ]
 }
@@ -419,7 +419,7 @@ EOF
   echo y > "$ARNESS_ROOT/worktrees/a/w/untracked.txt"
   run "$SCRIPT" remove --source a w
   [ "$status" -eq 13 ]
-  [[ "$output" == SKIPPED*/worktrees/a/w\ DIRTY ]]
+  [[ "$output" == SKIPPED*/worktrees/a/w\ DIRTY ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/w" ]
 }
 
@@ -429,7 +429,7 @@ EOF
   git_q -C "$SRC/a" config --unset branch.w.arness-base
   run "$SCRIPT" remove --source a w
   [ "$status" -eq 13 ]
-  [[ "$output" == SKIPPED*/worktrees/a/w\ UNKNOWN_BASE ]]
+  [[ "$output" == SKIPPED*/worktrees/a/w\ UNKNOWN_BASE ]] || false
 }
 
 @test "remove reports unknown names and keeps going" {
@@ -437,8 +437,8 @@ EOF
   mk_wt a ok
   run "$SCRIPT" remove --source a nope ok
   [ "$status" -eq 13 ]
-  [[ "$output" == *"SKIPPED"*"/worktrees/a/nope not-a-worktree"* ]]
-  [[ "$output" == *"REMOVED"*"/worktrees/a/ok"* ]]
+  [[ "$output" == *"SKIPPED"*"/worktrees/a/nope not-a-worktree"* ]] || false
+  [[ "$output" == *"REMOVED"*"/worktrees/a/ok"* ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/ok" ]
 }
 
@@ -537,7 +537,7 @@ merge_in_remote() {
   git -C "$SRC/a" remote set-url origin "$TMP/does-not-exist"
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"warning: could not refresh origin/epic/X-1"* ]]
+  [[ "$output" == *"warning: could not refresh origin/epic/X-1"* ]] || false
   [ "$(col w 5)" = "NOT_MERGED" ]
 }
 
@@ -547,7 +547,7 @@ merge_in_remote() {
   git -C "$SRC/a" remote add origin "$TMP/does-not-exist"
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
-  [[ "$output" != *warning* ]]
+  [[ "$output" != *warning* ]] || false
 }
 
 # --- local base that is behind its remote -------------------------------------
@@ -604,7 +604,7 @@ merge_into_origin_main() {
   git -C "$SRC/a" remote set-url origin "$TMP/does-not-exist"
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"warning: could not refresh origin/main"* ]]
+  [[ "$output" == *"warning: could not refresh origin/main"* ]] || false
   [ "$(col w 5)" = "NOT_MERGED" ]
 }
 
@@ -637,8 +637,8 @@ squash_merge_pr() {
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
   [ "$(col pr/X-2 5)" = "PR_MERGED" ]
-  [[ "$output" == *"note: origin/pr/X-2 no longer exists in a"* ]]
-  [[ "$output" != *"warning:"* ]]
+  [[ "$output" == *"note: origin/pr/X-2 no longer exists in a"* ]] || false
+  [[ "$output" != *"warning:"* ]] || false
   grep -q -- "pr list --head pr/X-2 --state merged" "$FAKE_GH_LOG"
 }
 
@@ -647,10 +647,10 @@ squash_merge_pr() {
   squash_merge_pr
   run "$SCRIPT" remove --source a pr/X-2
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/pr/X-2")"* ]]
+  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/pr/X-2")"* ]] || false
   [ ! -e "$ARNESS_ROOT/worktrees/a/pr" ]
   [ -z "$(git -C "$SRC/a" branch --list pr/X-2)" ]
-  ! git -C "$SRC/a" rev-parse --verify --quiet refs/remotes/origin/pr/X-2
+  ! git -C "$SRC/a" rev-parse --verify --quiet refs/remotes/origin/pr/X-2 || false
 }
 
 @test "own work squash-merged through a pull request is PR_MERGED, not NOT_MERGED" {
@@ -705,7 +705,7 @@ commit_on_pr_wt() {
   commit_on_pr_wt push
   run "$SCRIPT" remove --source a pr/X-2
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/pr/X-2")"* ]]
+  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/pr/X-2")"* ]] || false
   [ -z "$(git -C "$SRC/a" branch --list pr/X-2)" ]
 }
 
@@ -797,7 +797,7 @@ commit_on_remote_wt() {
   commit_on_remote_wt push
   run "$SCRIPT" remove --source a w
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/w")"* ]]
+  [[ "$output" == *"REMOVED $(git_path "$ARNESS_ROOT/worktrees/a/w")"* ]] || false
   [ -z "$(git -C "$SRC/a" branch --list w)" ]
   git -C "$ORIGIN" rev-parse --verify --quiet refs/heads/w >/dev/null
 }
@@ -877,7 +877,7 @@ mk_npm_state() {
   FAKE_NPM_RUN_OUT="STOPPED a/feat/x start 123" run "$SCRIPT" remove --source a feat/x
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "STOPPED a/feat/x start 123" ]
-  [[ "${lines[1]}" == REMOVED*/worktrees/a/feat/x ]]
+  [[ "${lines[1]}" == REMOVED*/worktrees/a/feat/x ]] || false
   [ "$(cat "$FAKE_NPM_RUN_LOG")" = "stop --worktree a/feat/x exists" ]
   [ ! -e "$ARNESS_ROOT/worktrees/a/feat/x" ]
 }
@@ -890,7 +890,7 @@ mk_npm_state() {
   mk_npm_state a/other
   run "$SCRIPT" remove --source a done
   [ "$status" -eq 0 ]
-  [[ "$output" == REMOVED*/worktrees/a/done ]]
+  [[ "$output" == REMOVED*/worktrees/a/done ]] || false
   [ ! -e "$FAKE_NPM_RUN_LOG" ]
 }
 
@@ -902,7 +902,7 @@ mk_npm_state() {
   mk_npm_state a/done
   FAKE_NPM_RUN_OUT="NO_NPM" FAKE_NPM_RUN_EXIT=3 run "$SCRIPT" remove --source a done
   [ "$status" -eq 13 ]
-  [[ "$output" == *SKIPPED*/worktrees/a/done\ stop-failed ]]
+  [[ "$output" == *SKIPPED*/worktrees/a/done\ stop-failed ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/done" ]
   [ -n "$(git -C "$SRC/a" branch --list done)" ]
 }
@@ -914,7 +914,7 @@ mk_npm_state() {
   mk_npm_state a/done
   run "$SCRIPT" remove --source a done
   [ "$status" -eq 13 ]
-  [[ "$output" == *SKIPPED*/worktrees/a/done\ stop-failed ]]
+  [[ "$output" == *SKIPPED*/worktrees/a/done\ stop-failed ]] || false
   [ -d "$ARNESS_ROOT/worktrees/a/done" ]
 }
 
@@ -925,7 +925,7 @@ mk_npm_state() {
   mk_npm_state a/open
   run "$SCRIPT" remove --source a open
   [ "$status" -eq 13 ]
-  [[ "$output" == SKIPPED*/worktrees/a/open\ NOT_MERGED ]]
+  [[ "$output" == SKIPPED*/worktrees/a/open\ NOT_MERGED ]] || false
   [ ! -e "$FAKE_NPM_RUN_LOG" ]
 }
 
@@ -1006,8 +1006,8 @@ mk_detached() {
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
   [ "$(col w 5)" = "EMPTY" ]
-  [[ "$output" != *"note:"* ]]
-  [[ "$output" != *"warning:"* ]]
+  [[ "$output" != *"note:"* ]] || false
+  [[ "$output" != *"warning:"* ]] || false
 }
 
 @test "a branch worktree based on HEAD lists with no note about a HEAD branch" {
@@ -1020,8 +1020,8 @@ mk_detached() {
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
   [ "$(col w 5)" = "EMPTY" ]
-  [[ "$output" != *"note:"* ]]
-  [[ "$output" != *"warning:"* ]]
+  [[ "$output" != *"note:"* ]] || false
+  [[ "$output" != *"warning:"* ]] || false
 }
 
 @test "a detached worktree based on HEAD lists with no note about a HEAD branch" {
@@ -1033,8 +1033,8 @@ mk_detached() {
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
   [ "$(col pr 5)" = "EMPTY" ]
-  [[ "$output" != *"note:"* ]]
-  [[ "$output" != *"warning:"* ]]
+  [[ "$output" != *"note:"* ]] || false
+  [[ "$output" != *"warning:"* ]] || false
 }
 
 @test "a detached worktree based on origin/HEAD is not fetched as a HEAD branch" {
@@ -1046,8 +1046,8 @@ mk_detached() {
   run "$SCRIPT" list
   [ "$status" -eq 0 ]
   [ "$(col pr 5)" = "EMPTY" ]
-  [[ "$output" != *"note:"* ]]
-  [[ "$output" != *"warning:"* ]]
+  [[ "$output" != *"note:"* ]] || false
+  [[ "$output" != *"warning:"* ]] || false
 }
 
 @test "the recorded ref is still shown after that branch moves on" {
