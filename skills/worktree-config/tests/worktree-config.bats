@@ -50,9 +50,9 @@ teardown() { rm -rf "$TMP"; }
 @test "-h prints the whole header, exit codes included" {
   run "$SCRIPT" -h
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Exit codes:"* ]]
-  [[ "$output" == *"13 some file skipped."* ]]
-  [[ "$output" != *"set -euo"* ]]
+  [[ "$output" == *"Exit codes:"* ]] || false
+  [[ "$output" == *"13 some file skipped."* ]] || false
+  [[ "$output" != *"set -euo"* ]] || false
 }
 
 @test "NO_WORKTREE when the slug has no name" {
@@ -79,7 +79,7 @@ teardown() { rm -rf "$TMP"; }
 @test "NOT_FOUND for an unknown worktree" {
   run "$SCRIPT" a/nope
   [ "$status" -eq 4 ]
-  [[ "$output" == NOT_FOUND*/worktrees/a/nope ]]
+  [[ "$output" == NOT_FOUND*/worktrees/a/nope ]] || false
 }
 
 @test "NOT_FOUND for a plain folder that is not a worktree" {
@@ -127,7 +127,7 @@ EOF
   cfg a f.txt hi
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 2 ]
-  [[ "$output" == *"error: cygpath cannot convert "*"/worktrees/a/feat/x"* ]]
+  [[ "$output" == *"error: cygpath cannot convert "*"/worktrees/a/feat/x"* ]] || false
   [ "$(cat "$(WT a feat/x)/f.txt")" = 1 ]
 }
 
@@ -144,9 +144,9 @@ EOF
   cfg a .env.local 'A=1'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"COPIED src/deep/test.js"* ]]
-  [[ "$output" == *"COPIED .env.local"* ]]
-  [[ "$output" == *"files=2 install=no" ]]
+  [[ "$output" == *"COPIED src/deep/test.js"* ]] || false
+  [[ "$output" == *"COPIED .env.local"* ]] || false
+  [[ "$output" == *"files=2 install=no" ]] || false
   [ "$(cat "$(WT a feat/x)/src/deep/test.js")" = "console.log(1)" ]
   [ "$(cat "$(WT a feat/x)/.env.local")" = "A=1" ]
 }
@@ -159,7 +159,7 @@ EOF
   cfg a .claude/settings.json '{}'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"files=3 install=no" ]]
+  [[ "$output" == *"files=3 install=no" ]] || false
   [ -f "$(WT a feat/x)/.DS_Store" ]
   [ -f "$(WT a feat/x)/.vscode/settings.json" ]
 }
@@ -173,8 +173,8 @@ EOF
   cfg a .claude/settings.json '{}'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"files=2 install=no" ]]
-  [[ "$output" != *".DS_Store"* ]]
+  [[ "$output" == *"files=2 install=no" ]] || false
+  [[ "$output" != *".DS_Store"* ]] || false
   [ ! -e "$(WT a feat/x)/.DS_Store" ]
   [ ! -e "$(WT a feat/x)/src/.DS_Store" ]
   [ ! -e "$(WT a feat/x)/._ok.txt" ]
@@ -216,7 +216,7 @@ EOF
   cfg a c.txt x
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"files=1 install=no" ]]
+  [[ "$output" == *"files=1 install=no" ]] || false
   [ -f "$(WT a feat/x)/c.txt" ]
 }
 
@@ -225,7 +225,7 @@ EOF
   printf '%s\n' '*.log' > "$ARNESS_ROOT/config/.configignore"
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == "NO_CONFIG a" ]]
+  [[ "$output" == "NO_CONFIG a" ]] || false
 }
 
 @test "overwrites existing files and is idempotent" {
@@ -258,7 +258,7 @@ EOF
   printf '\000\001\002\377' > "$ARNESS_ROOT/config/a/blob.bin"
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"COPIED blob.bin"* ]]
+  [[ "$output" == *"COPIED blob.bin"* ]] || false
   cmp "$ARNESS_ROOT/config/a/blob.bin" "$(WT a feat/x)/blob.bin"
 }
 
@@ -268,7 +268,7 @@ EOF
   cfg a .env 'T={{$MY_TOKEN}}'
   MY_TOKEN=abc run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"COPIED .env"* ]]
+  [[ "$output" == *"COPIED .env"* ]] || false
   [ "$(cat "$(WT a feat/x)/.env")" = 'T={{$MY_TOKEN}}' ]
 }
 
@@ -284,7 +284,7 @@ EOF
   cfg a install.sh 'pwd -P > ran-in.txt'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" == *"files=0 install=yes" ]]
+  [[ "$output" == *"files=0 install=yes" ]] || false
   [ ! -e "$(WT a feat/x)/install.sh" ]
   [ "$(cat "$(WT a feat/x)/ran-in.txt")" = "$(cd -P "$(WT a feat/x)" && pwd -P)" ]
 }
@@ -302,8 +302,8 @@ EOF
   chmod 644 "$ARNESS_ROOT/config/a/install.sh"
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 0 ]
-  [[ "$output" != *noisy* ]]
-  [[ "$output" == *DONE* ]]
+  [[ "$output" != *noisy* ]] || false
+  [[ "$output" == *DONE* ]] || false
   log="$ARNESS_ROOT/tmp/worktree-config/a/feat/x-install.log"
   grep -q noisy-install-output "$log"
   grep -q noisy-err "$log"
@@ -320,8 +320,8 @@ EOF
   cfg a install.sh 'echo boom; exit 3'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 7 ]
-  [[ "$output" == *"INSTALL_FAILED 3 "*"/tmp/worktree-config/a/feat/x-install.log"* ]]
-  [[ "$output" == *boom* ]]
+  [[ "$output" == *"INSTALL_FAILED 3 "*"/tmp/worktree-config/a/feat/x-install.log"* ]] || false
+  [[ "$output" == *boom* ]] || false
   [ -f "$(WT a feat/x)/keep.txt" ]
 }
 
@@ -329,9 +329,9 @@ EOF
   cfg a install.sh 'for i in $(seq 1 100); do echo "line $i"; done; exit 1'
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 7 ]
-  [[ "$output" == *"line 100"* ]]
-  [[ "$output" == *"line 81"* ]]
-  [[ "$output" != *"line 80"* ]]
+  [[ "$output" == *"line 100"* ]] || false
+  [[ "$output" == *"line 81"* ]] || false
+  [[ "$output" != *"line 80"* ]] || false
   [ "$(grep -c '^line' "$ARNESS_ROOT/tmp/worktree-config/a/feat/x-install.log")" -eq 100 ]
 }
 
@@ -350,7 +350,7 @@ EOF
   ln -s /etc/hosts "$ARNESS_ROOT/config/a/link.txt"
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *"SKIPPED link.txt symlink"* ]]
+  [[ "$output" == *"SKIPPED link.txt symlink"* ]] || false
   [ ! -e "$(WT a feat/x)/link.txt" ]
   [ -f "$(WT a feat/x)/real.txt" ]
 }
@@ -361,7 +361,7 @@ EOF
   ln -s "$TMP/outside" "$(WT a feat/x)/out"
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *"SKIPPED out/x.txt symlink"* ]]
+  [[ "$output" == *"SKIPPED out/x.txt symlink"* ]] || false
   [ -z "$(ls -A "$TMP/outside")" ]
 }
 
@@ -379,14 +379,14 @@ EOF
   cfg a ok.txt 1
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *"SKIPPED .git/config reserved-path"* ]]
+  [[ "$output" == *"SKIPPED .git/config reserved-path"* ]] || false
   [ -f "$(WT a feat/x)/ok.txt" ]
-  ! grep -q evil "$(WT a feat/x)/.git"
+  ! grep -q evil "$(WT a feat/x)/.git" || false
 }
 
 @test "a directory in the worktree where a file should go is a conflict" {
   cfg a f.txt/inner 1
   run "$SCRIPT" a/feat/x
   [ "$status" -eq 13 ]
-  [[ "$output" == *"SKIPPED f.txt/inner conflict"* ]]
+  [[ "$output" == *"SKIPPED f.txt/inner conflict"* ]] || false
 }
