@@ -28,6 +28,8 @@ shared_bats_files() {
 # Lines continued with `\` are joined first and heredoc bodies are skipped; a heredoc
 # still open at the end of a file is reported. if/while conditions, lines with `||`
 # and `&&` lists that run something other than a check are not matched.
+# Known limit: quotes are stripped by simple patterns, so a `"` inside '...' (or a
+# `'` inside "...") can confuse them; no shared bats file has one today.
 silent_assertions() {
   awk '
     # The line without quoted strings and trailing comment; a quoted heredoc
@@ -38,7 +40,7 @@ silent_assertions() {
         s = substr(s, 1, RSTART - 1) w substr(s, RSTART + RLENGTH)
       }
       gsub(/"([^"\\]|\\.)*"/, "\"\"", s); gsub(/\047[^\047]*\047/, "\047\047", s)
-      sub(/(^|[ \t])#.*$/, "", s)
+      sub(/^#.*$/, "", s); sub(/[ \t]#.*$/, "", s)
       return s
     }
     function is_check(s) {
@@ -104,7 +106,10 @@ silent_assertions() {
 @test "no bats assertion is silent in bash 3.2" {
   run silent_assertions $(shared_bats_files)
   [ "$status" -eq 0 ]
-  [ -z "$output" ] || { echo "end these lines with || false:"; echo "$output"; false; }
+  [ -z "$output" ] || {
+    echo "end each file:line assertion with || false, and close each unterminated heredoc:"
+    echo "$output"; false
+  }
 }
 
 @test "the silent assertion check flags lone [[, bare ! and && lists of checks, and nothing else" {
@@ -120,12 +125,12 @@ silent_assertions() {
   [[ "$output" == *a* ]]  # c
   (( x > 1 ))
   [ -n "$x" ] && (( x > 1 ))
+  [[ "$output" == "a # b" ]]
   [[ "$output" == *a* ]] || false
   ! grep -q a f || false
   ! grep -q a f || { echo no; false; }
   ! grep -q a f || false  # c
   (( x > 1 )) || false
-  [[ "$output" == "a # b" ]] || false
   ! grep -q a \
       f || false
   if [[ "$output" == *a* ]]; then :; fi
@@ -147,7 +152,7 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 9 ]
+  [ "${#lines[@]}" -eq 10 ]
   [ "${lines[0]}" = "$d/x.bats:1:   [[ \"\$output\" == *a* ]]" ]
   [ "${lines[1]}" = "$d/x.bats:2:   ! grep -q a f" ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
@@ -157,6 +162,22 @@ EOF
   [ "${lines[6]}" = "$d/x.bats:8:   [[ \"\$output\" == *a* ]]  # c" ]
   [ "${lines[7]}" = "$d/x.bats:9:   (( x > 1 ))" ]
   [ "${lines[8]}" = "$d/x.bats:10:   [ -n \"\$x\" ] && (( x > 1 ))" ]
+  [ "${lines[9]}" = "$d/x.bats:11:   [[ \"\$output\" == \"a # b\" ]]" ]
+}
+
+@test "the silent assertion check handles column-0 comments, closed quoted heredocs and continuations across files" {
+  d="$(mktemp -d)"
+  printf '# cat <<EOF\n  [[ a ]]\n' > "$d/a.bats"
+  printf '  cat <<"EOF"\n  [[ in ]]\nEOF\n  cat <<-'\''X'\''\n\t[[ in ]]\n\tX\n  [[ b ]]\n' > "$d/b.bats"
+  printf '  ! grep -q a \\\n' > "$d/c.bats"
+  printf '  [[ d ]]\n' > "$d/d.bats"
+  run silent_assertions "$d/a.bats" "$d/b.bats" "$d/c.bats" "$d/d.bats"
+  rm -rf "$d"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = "$d/a.bats:2:   [[ a ]]" ]
+  [ "${lines[1]}" = "$d/b.bats:7:   [[ b ]]" ]
+  [ "${lines[2]}" = "$d/d.bats:1:   [[ d ]]" ]
 }
 
 @test "the silent assertion check skips no file after a heredoc look-alike and fails on an unterminated one" {
