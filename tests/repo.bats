@@ -26,13 +26,14 @@ shared_bats_files() {
 # or several); control flow is written as `if`. A `;` outside quotes, `[[ ]]`, `(( ))`,
 # `$( )` and that block always flags the line. The only exception is a lone `[ ... ]`
 # with no `&&` or `;`, a plain command that fails the test in every bash, alone or
-# followed by `|| [ ... ]`, `|| skip`, `|| return`, `|| continue` or `|| exit`.
+# with each `||` followed by `[ ... ]`, `skip`, `return`, `continue` or `exit`.
 # if/elif/while/until conditions do not start with those tokens, so they are never
 # matched, and neither is a list that starts with another command
 # (`grep -q a f && grep -q b f`), by design. The rule looks at the logical line: lines
 # ending in `\`, `&&`, `||` or `|` joined with the next, quoted strings and the
-# trailing comment removed, the inside of `[[ ]]`, `(( ))` and `$( )` emptied, heredoc
-# bodies skipped (a heredoc still open at the end of a file is reported).
+# trailing comment removed line by line, a `|| {` block joined up to its `}`, the
+# inside of `${ }`, `[[ ]]`, `(( ))` and `$( )` emptied, heredoc bodies skipped (a
+# heredoc or a `|| {` block still open at the end of a file is reported).
 # Known limits: an odd number of `"` inside '...' can confuse the quote stripping; a
 # `]]`, `))` or `)` nested inside a check (`[[:digit:]]` inside `[[ ]]`) closes it too
 # early; and `( ... )` and `{ ... }` other than the final block are not emptied.
@@ -51,52 +52,62 @@ silent_assertions() {
     }
     # s with what is between each open and its close emptied, so a || or && inside
     # [[ ]], (( )) or $( ) is not taken for the list operator.
-    function blank(s, op, cl,   i, j, out) {
+    function blank(s, op, ed,   i, j, out) {
       out = ""
       while ((i = index(s, op)) > 0) {
-        j = index(substr(s, i + length(op)), cl)
+        j = index(substr(s, i + length(op)), ed)
         if (j == 0) break
-        out = out substr(s, 1, i - 1) op " " cl
-        s = substr(s, i + length(op) + j - 1 + length(cl))
+        out = out substr(s, 1, i - 1) op " " ed
+        s = substr(s, i + length(op) + j - 1 + length(ed))
       }
       return out s
     }
-    function silent(s,   t) {
+    # A part of a || list after a lone [ ] that still fails the test: [ ] or a jump.
+    function failing_tail(p) {
+      return p ~ /^[ \t]*\[[ \t]/ || p ~ /^[ \t]*(skip|return|continue|exit)([ \t]|$)/
+    }
+    function silent(s,   n, i, p) {
       if (s !~ /^[ \t]*(\[|\(\(|![ \t])/) return 0
-      s = blank(blank(blank(s, "$(", ")"), "[[", "]]"), "((", "))")
+      s = blank(blank(blank(blank(s, "${", "}"), "$(", ")"), "[[", "]]"), "((", "))")
+      gsub(/\$\{ \}/, "$v", s)
       # A final block counts as || false only when it ends in a command that fails.
-      sub(/\|\|[ \t]*\{[^{}]*;[ \t]*(false|return[ \t]+[1-9][0-9]*|exit[ \t]+[1-9][0-9]*)[ \t]*;?[ \t]*\}[ \t]*$/, "|| false", s)
+      sub(/\|\|[ \t]*\{([^{}]*;)?[ \t]*(false|return[ \t]+[1-9][0-9]*|exit[ \t]+[1-9][0-9]*)[ \t]*;?[ \t]*\}[ \t]*$/, "|| false", s)
       if (s ~ /;/) return 1
       if (s ~ /\|\|[ \t]*false[ \t]*$/) return 0
       if (s !~ /^[ \t]*\[[ \t]/ || s ~ /&&/) return 1
-      # A lone [ ], alone or followed by || and another [ ] or skip/return/continue/exit.
-      t = s
-      if (!sub(/.*\|\|[ \t]*/, "", t)) return 0
-      return !(t ~ /^\[[ \t]/ || t ~ /^(skip|return|continue|exit)([ \t]|$)/)
+      # A lone [ ], alone or with each || followed by another [ ] or skip/return/continue/exit.
+      n = split(s, p, /\|\|/)
+      for (i = 2; i <= n; i++) if (!failing_tail(p[i])) return 1
+      return 0
     }
-    function unterminated() { if (tag != "") print file ": unterminated heredoc " tag }
-    FNR == 1 { unterminated(); tag = ""; line = ""; block = 0; file = FILENAME }
+    function unterminated() {
+      if (tag != "") print file ": unterminated heredoc " tag
+      if (block) print file ": unterminated || { block"
+    }
+    FNR == 1 { unterminated(); tag = ""; line = ""; cl = ""; block = 0; file = FILENAME }
     tag != "" { if ($0 ~ "^[ \t]*" tag "[ \t]*$") tag = ""; next }
+    # line is the raw logical line, for the report; cl the same line cleaned line by
+    # line, so a comment on one line does not hide the lines joined after it.
     {
       c = clean($0)
       if (c ~ /<<-?[ \t]*[A-Za-z_]/ && c !~ /<<</) {
         tag = c; sub(/.*<<-?[ \t]*/, "", tag); sub(/[^A-Za-z0-9_].*$/, "", tag)
       }
-      line = line $0
+      line = line $0; cl = cl c
     }
-    /\\$/ { sub(/\\$/, "", line); next }
-    clean(line) ~ /(&&|\|)[ \t]*$/ { next }
+    /\\$/ { sub(/\\$/, "", line); sub(/\\$/, "", cl); next }
+    cl ~ /(&&|\|)[ \t]*$/ { next }
     # A `|| {` block written over several lines is joined, with `;`, up to its `}`.
     {
-      c = clean(line)
+      c = cl
       if ((block || c ~ /\|\|[ \t]*\{/) && gsub(/\{/, "{", c) > gsub(/\}/, "}", c)) {
-        block = 1; line = line ";"; next
+        block = 1; line = line ";"; cl = cl ";"; next
       }
       block = 0
     }
     {
-      if (silent(clean(line))) print FILENAME ":" FNR ": " line
-      line = ""
+      if (silent(cl)) print FILENAME ":" FNR ": " line
+      line = ""; cl = ""
     }
     END { unterminated() }
   ' "$@"
@@ -136,7 +147,7 @@ silent_assertions() {
   run silent_assertions $(shared_bats_files)
   [ "$status" -eq 0 ]
   [ -z "$output" ] || {
-    echo "end each file:line assertion with || false (write control flow as if), and close each unterminated heredoc:"
+    echo "end each file:line assertion with || false (write control flow as if), and close each unterminated heredoc or || { block:"
     echo "$output"; false
   }
 }
@@ -207,6 +218,14 @@ silent_assertions() {
   [[ -z "$output" ]] || {
     echo "$output"; false
   }
+  [ -n "$a" ] || echo no || [ -n "$b" ]
+  [[ -n "$a" ]] || { false; }
+  ! grep -q a f || { exit 1; }
+  [[ -n "$a" ]] || { echo ${#lines[@]}; false; }
+  [[ -z "$output" ]] || {  # c
+    echo "$output"; false  # d
+  }
+  [[ "$output" == *z* ]]
   cat > f <<'IN'
   [[ heredoc text, not an assertion ]]
   ! neither is this
@@ -215,7 +234,7 @@ EOF
   run silent_assertions "$d/x.bats"
   rm -rf "$d"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 51 52 53 54 55 58 " ]
+  [ "$(printf '%s\n' "${lines[@]}" | cut -d: -f2 | tr '\n' ' ')" = "1 2 4 5 6 7 8 9 10 11 12 13 14 34 35 36 37 39 45 46 47 48 51 52 53 54 55 58 64 71 " ]
   [ "${lines[2]}" = "$d/x.bats:4:   ! grep -q a       f" ]
   [ "${lines[8]}" = "$d/x.bats:10:   [[ \"\$output\" == *a* ]]  # c" ]
 }
@@ -250,6 +269,18 @@ EOF
   [ "${lines[2]}" = "$d/c.bats:2:   [[ c ]]" ]
   [ "${lines[3]}" = "$d/c.bats: unterminated heredoc EOF" ]
   [ "${lines[4]}" = "$d/d.bats:1:   [[ d ]]" ]
+}
+
+@test "the silent assertion check reports a || { block left open at the end of a file" {
+  d="$(mktemp -d)"
+  printf '  [[ a ]] || {\n    echo no; false\n' > "$d/a.bats"
+  printf '  [[ b ]]\n' > "$d/b.bats"
+  run silent_assertions "$d/a.bats" "$d/b.bats"
+  rm -rf "$d"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [ "${lines[0]}" = "$d/a.bats: unterminated || { block" ]
+  [ "${lines[1]}" = "$d/b.bats:1:   [[ b ]]" ]
 }
 
 @test "the silent assertion check reports a heredoc left open at the end of the last file" {
