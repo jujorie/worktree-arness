@@ -44,8 +44,9 @@ All the work is done by `scripts/repo-create.sh` (in this skill's folder), run f
 | Output | Exit | What to do |
 |---|---|---|
 | `CREATED <owner>/<name> <path>` | 0 | Report the repo and the path. Offer `worktree-create` to start working on it. Done. |
-| `NOT_CLONED <owner>/<name> <url>` | 14 | The repo **exists** on GitHub (created now, even if `gh repo create` reported an error after creating it) but it was not cloned; the reason is on stderr. Say so, and offer to clone it with the `repo-clone` skill. Never run `apply` again: the repo already exists. |
-| error on stderr | 3 | `gh repo create` failed (permissions in the organization, name taken, network). Show the gh error. If it says `nothing was created`, nothing was. If it says to run plan, the repo may exist: run `plan` again and follow its status (`REMOTE_EXISTS` → offer `repo-clone`). |
+| `NOT_CLONED <owner>/<name> <url>` | 14 | The repo **was created** on GitHub but it was not cloned; the reason is on stderr. Say so, and offer to clone it with the `repo-clone` skill. Never run `apply` again: the repo already exists. |
+| `CREATE_FAILED_EXISTS <owner>/<name> <url>` | 15 | `gh repo create` failed (its error is on stderr), yet the repo exists on GitHub and nothing was cloned. It may have been created by this call just before the error, or by someone else after the checks: there is no way to tell. Tell the user both possibilities and ask whether to clone it with the `repo-clone` skill (URL from the output). Never run `apply` again. |
+| error on stderr | 3 | `gh repo create` failed (permissions in the organization, name taken, network). Show the gh error. If it says the repo `was not found on GitHub right after the failure`, it was most likely not created; if it says to run plan, it may exist. Either way, before retrying run `plan` again and follow its status (`REMOTE_EXISTS` → offer `repo-clone`). |
 | no status line, any other exit (e.g. 130 after Ctrl-C) | other | `apply` was interrupted and the repo may exist. Run `plan` again and follow its status. |
 
 ## Rules
@@ -53,5 +54,5 @@ All the work is done by `scripts/repo-create.sh` (in this skill's folder), run f
 - Never run `apply` without showing the plan and getting the user's explicit confirmation in this conversation, and always with the options of that plan.
 - Never pick the owner or a public visibility on your own.
 - Never delete a repository on GitHub, and never delete or overwrite folders in `source/`; the script refuses an existing destination.
-- To clone a repo that already exists, use `repo-clone`, not this skill.
+- To clone a repo that already exists, use `repo-clone`, not this skill, and only after the user says yes: `REMOTE_EXISTS` and `CREATE_FAILED_EXISTS` never clone on their own.
 - `source/` is git-ignored, so the clone is never committed.

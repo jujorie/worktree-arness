@@ -15,14 +15,18 @@
 #   EXISTS <path>                  source/<name> already exists; nothing done (exit 10)
 #   REMOTE_EXISTS <owner>/<name> <url>  the repo already exists on GitHub; nothing done (exit 12)
 #   NO_OWNER <owner>               no GitHub user or organization with that name (exit 13)
-#   NOT_CLONED <owner>/<name> <url>     apply created the repo but the clone failed (exit 14)
+#   NOT_CLONED <owner>/<name> <url>     apply created the repo but did not clone it: the clone failed,
+#                                  or the repo could not be looked up after creating it (exit 14)
+#   CREATE_FAILED_EXISTS <owner>/<name> <url>  gh repo create failed, yet the repo exists: created
+#                                  before the failure or by someone else; nothing cloned (exit 15)
 #   NO_AUTH                        gh is missing or not logged in to github.com (exit 4)
 # Exit codes: 0 ok, 2 invalid usage/input, 3 GitHub or network error, 4 no gh auth, 10 exists,
-#             12 remote exists, 13 no owner, 14 created but not cloned, 20 plan ready.
+#             12 remote exists, 13 no owner, 14 created but not cloned, 15 create failed but exists,
+#             20 plan ready.
 set -euo pipefail
 
 EXIT_USAGE=2 EXIT_GITHUB=3 EXIT_NO_AUTH=4 EXIT_EXISTS=10 EXIT_REMOTE_EXISTS=12 EXIT_NO_OWNER=13
-EXIT_NOT_CLONED=14 EXIT_PLAN=20
+EXIT_NOT_CLONED=14 EXIT_CREATE_FAILED_EXISTS=15 EXIT_PLAN=20
 GH_HOST_NAME="github.com"
 
 die() { echo "error: $*" >&2; exit "$EXIT_USAGE"; }
@@ -202,7 +206,7 @@ main() {
   # Look the repo up even after a failed create: the API may have created it before failing.
   urls="$(remote_urls "$repo")" || rc=$?
   if [ "$created" -eq 0 ] && [ "$rc" -eq 1 ]; then
-    echo "error: gh repo create failed for $repo; nothing was created" >&2
+    echo "error: gh repo create failed for $repo; it was not found on GitHub right after the failure" >&2
     exit "$EXIT_GITHUB"
   fi
   if [ "$created" -eq 0 ] && [ "$rc" -ne 0 ]; then
@@ -214,8 +218,13 @@ main() {
     echo "NOT_CLONED $repo $(fallback_url "$repo" "$PROTOCOL")"
     exit "$EXIT_NOT_CLONED"
   fi
-  if [ "$created" -eq 0 ]; then echo "warning: gh repo create failed, but $repo exists on GitHub" >&2; fi
   url="$(pick_url "$urls" "$PROTOCOL")"
+  # Created by this call before the API failed, or by someone else after the checks: no way to tell,
+  # so clone nothing and let the user decide.
+  if [ "$created" -eq 0 ]; then
+    echo "CREATE_FAILED_EXISTS $repo $url"
+    exit "$EXIT_CREATE_FAILED_EXISTS"
+  fi
 
   local out
   rc=0

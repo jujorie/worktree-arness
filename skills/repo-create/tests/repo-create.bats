@@ -35,6 +35,11 @@ case "$1 ${2:-}" in
   "repo create")
     : > "$GH_LOG.create"
     [ -z "${GH_CREATE_FAIL:-}" ] || { echo "GraphQL: permission denied" >&2; exit 1; }
+    if [ -n "${GH_CREATE_TAKEN:-}" ]; then
+      git_q init -q --bare "$REMOTES/$3.git"
+      echo "GraphQL: Name already exists on this account (createRepository)" >&2
+      exit 1
+    fi
     r="$REMOTES/$3.git"
     git_q init -q --bare "$r"
     case " $* " in
@@ -185,16 +190,16 @@ teardown() { rm -rf "$TMP"; }
 @test "a failed gh repo create is exit 3 and clones nothing" {
   GH_CREATE_FAIL=1 run "$SCRIPT" apply my-org/my-repo
   [ "$status" -eq 3 ]
-  [[ "$output" == *"gh repo create failed for my-org/my-repo; nothing was created"* ]] || false
+  [[ "$output" == *"gh repo create failed for my-org/my-repo; it was not found on GitHub right after the failure"* ]] || false
   [ ! -e "$SRC/my-repo" ]
 }
 
-@test "a failed gh repo create whose repo cannot be looked up says to run plan, not that nothing was created" {
+@test "a failed gh repo create whose repo cannot be looked up says to run plan, not that it was not found" {
   GH_CREATE_FAIL=1 GH_REPO_LOOKUP_FAIL=after-create run "$SCRIPT" apply my-org/my-repo
   [ "$status" -eq 3 ]
   grep -q '^repo create' "$GH_LOG"
   [[ "$output" == *"run plan"* ]] || false
-  [[ "$output" != *"nothing was created"* ]] || false
+  [[ "$output" != *"was not found on GitHub"* ]] || false
   [ ! -e "$SRC/my-repo" ]
 }
 
@@ -215,12 +220,19 @@ teardown() { rm -rf "$TMP"; }
   [ "${lines[${#lines[@]}-1]}" = "NOT_CLONED my-org/other https://github.com/my-org/other.git" ]
 }
 
-@test "a gh repo create that fails after creating the repo still clones it" {
-  GH_FAIL_AFTER_CREATE=1 run "$SCRIPT" apply my-org/my-repo
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"warning: gh repo create failed, but my-org/my-repo exists"* ]] || false
-  [ "${lines[${#lines[@]}-1]}" = "CREATED my-org/my-repo $SRC/my-repo" ]
-  [ -f "$SRC/my-repo/README.md" ]
+@test "a gh repo create that fails while the repo exists clones nothing and says CREATE_FAILED_EXISTS" {
+  GH_FAIL_AFTER_CREATE=1 run "$SCRIPT" apply --protocol ssh my-org/my-repo
+  [ "$status" -eq 15 ]
+  [ "${lines[${#lines[@]}-1]}" = "CREATE_FAILED_EXISTS my-org/my-repo file://$REMOTES/my-org/my-repo.git" ]
+  [[ "$output" != *"CREATED "* ]] || false
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "a repo created by someone else between plan's checks and the create is not cloned" {
+  GH_CREATE_TAKEN=1 run "$SCRIPT" apply my-org/my-repo
+  [ "$status" -eq 15 ]
+  [ "${lines[${#lines[@]}-1]}" = "CREATE_FAILED_EXISTS my-org/my-repo file://$REMOTES/my-org/./my-repo.git" ]
+  [ ! -e "$SRC/my-repo" ]
 }
 
 @test "every gh call goes to github.com, whatever gh's default host" {
