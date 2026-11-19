@@ -6,6 +6,7 @@
 !/.gitignore
 !/README.md
 !/repo-clone/
+!/repo-create/
 !/worktree-create/
 !/worktree-config/
 !/worktree-clean/

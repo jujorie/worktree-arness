@@ -7,10 +7,12 @@
     "bash": {
       "skills/*/scripts/*.sh": "allow",
       "skills/*/scripts/*.sh *": "allow",
-      "skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"
+      "skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask",
+      "skills/repo-create/scripts/repo-create.sh apply *": "ask"
     },
     "skill": {
       "repo-clone": "allow",
+      "repo-create": "allow",
       "worktree-create": "allow",
       "worktree-clean": "allow",
       "worktree-config": "allow",

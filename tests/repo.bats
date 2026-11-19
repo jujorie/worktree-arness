@@ -511,3 +511,9 @@ mk_git_root() {
   ! grep '^allowed-tools:' "$REPO_ROOT/skills/plugin-manage/SKILL.md" | grep -qE 'plugin-manage\.sh (\*|apply)' || false
   grep -qF '"skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"' "$REPO_ROOT/providers/opencode/opencode.json"
 }
+
+@test "repo-create apply is never pre-allowed" {
+  ! grep -F 'repo-create.sh' "$REPO_ROOT/providers/claude/settings.json" | grep -qE 'repo-create\.sh (\*|apply)' || false
+  ! grep '^allowed-tools:' "$REPO_ROOT/skills/repo-create/SKILL.md" | grep -qE 'repo-create\.sh (\*|apply)' || false
+  grep -qF '"skills/repo-create/scripts/repo-create.sh apply *": "ask"' "$REPO_ROOT/providers/opencode/opencode.json"
+}

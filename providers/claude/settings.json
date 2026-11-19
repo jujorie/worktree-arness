@@ -5,6 +5,7 @@
     "allow": [
       {{$PLUGIN_ALLOW}}
       "Skill(repo-clone)",
+      "Skill(repo-create)",
       "Skill(worktree-create)",
       "Skill(worktree-clean)",
       "Skill(worktree-config)",
@@ -13,6 +14,8 @@
       "Skill(plugin-manage)",
       "Bash(skills/repo-clone/scripts/repo-clone.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/repo-clone/scripts/repo-clone.sh *)",
+      "Bash(skills/repo-create/scripts/repo-create.sh plan *)",
+      "Bash({{$ARNESS_ROOT}}/skills/repo-create/scripts/repo-create.sh plan *)",
       "Bash(skills/worktree-create/scripts/worktree-create.sh *)",
       "Bash({{$ARNESS_ROOT}}/skills/worktree-create/scripts/worktree-create.sh *)",
       "Bash(skills/worktree-clean/scripts/worktree-clean.sh *)",
