@@ -22,12 +22,18 @@ case "$1 ${2:-}" in
     case "$2" in
       users/*) [ -d "$REMOTES/${2#users/}" ] || not_found; echo "${2#users/}" ;;
       repos/*)
+        # GH_REPO_LOOKUP_FAIL: 1 fails every repo lookup, after-create only those after `repo create`.
+        case "${GH_REPO_LOOKUP_FAIL:-}" in
+          1) echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1 ;;
+          after-create) [ ! -e "$GH_LOG.create" ] || { echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1; } ;;
+        esac
         r="$REMOTES/${2#repos/}.git"
         [ -d "$r" ] || not_found
         if [ -n "${GH_BAD_CLONE_URL:-}" ]; then r="$r-missing"; fi
         echo "file://$r file://${r%/*}/./${r##*/}" ;;
     esac ;;
   "repo create")
+    : > "$GH_LOG.create"
     [ -z "${GH_CREATE_FAIL:-}" ] || { echo "GraphQL: permission denied" >&2; exit 1; }
     r="$REMOTES/$3.git"
     git_q init -q --bare "$r"
@@ -120,6 +126,15 @@ teardown() { rm -rf "$TMP"; }
   [ "$output" = "NO_AUTH" ]
 }
 
+@test "plan stops with exit 3 when the repo lookup fails with an error other than 404" {
+  GH_REPO_LOOKUP_FAIL=1 run "$SCRIPT" plan my-org/my-repo
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"could not look up my-org/my-repo"* ]] || false
+  [[ "$output" != *"REMOTE_EXISTS"* ]] || false
+  [[ "$output" != *"CONFIRM_CREATE"* ]] || false
+  ! grep -q '^repo create' "$GH_LOG" || false
+}
+
 @test "a network error is exit 3, not NO_OWNER" {
   GH_NET_FAIL=1 run "$SCRIPT" plan my-org/my-repo
   [ "$status" -eq 3 ]
@@ -171,6 +186,15 @@ teardown() { rm -rf "$TMP"; }
   GH_CREATE_FAIL=1 run "$SCRIPT" apply my-org/my-repo
   [ "$status" -eq 3 ]
   [[ "$output" == *"gh repo create failed for my-org/my-repo; nothing was created"* ]] || false
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "a failed gh repo create whose repo cannot be looked up says to run plan, not that nothing was created" {
+  GH_CREATE_FAIL=1 GH_REPO_LOOKUP_FAIL=after-create run "$SCRIPT" apply my-org/my-repo
+  [ "$status" -eq 3 ]
+  grep -q '^repo create' "$GH_LOG"
+  [[ "$output" == *"run plan"* ]] || false
+  [[ "$output" != *"nothing was created"* ]] || false
   [ ! -e "$SRC/my-repo" ]
 }
 
@@ -262,4 +286,9 @@ teardown() { rm -rf "$TMP"; }
   run "$SCRIPT" -h
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage: repo-create.sh plan"* ]] || false
+  [[ "$output" == *"--private"* ]] || false
+  [[ "$output" != *"set -euo"* ]] || false
+  run "$SCRIPT" plan -h
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Exit codes:"* && "$output" != *"set -euo"* ]] || false
 }

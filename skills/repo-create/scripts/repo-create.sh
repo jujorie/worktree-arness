@@ -3,7 +3,7 @@
 #
 # Usage: repo-create.sh plan  [options] <owner>/<name>
 #        repo-create.sh apply [options] <owner>/<name>
-# Options: --public | --internal (default: private), --description TEXT, --no-readme,
+# Options: --private (default) | --public | --internal, --description TEXT, --no-readme,
 #          --protocol ssh|https (default: gh's git_protocol for github.com, else https)
 #
 # plan checks everything and writes nothing; apply creates the repo on GitHub, then clones it.
@@ -26,6 +26,9 @@ EXIT_NOT_CLONED=14 EXIT_PLAN=20
 GH_HOST_NAME="github.com"
 
 die() { echo "error: $*" >&2; exit "$EXIT_USAGE"; }
+
+# Print the header comment (from line 2 to the first line that is not a comment) as the usage.
+usage() { awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 
 script_dir() { (cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P); }
 
@@ -138,7 +141,7 @@ main() {
 
   case "${1:-}" in
     plan|apply) cmd="$1"; shift ;;
-    -h|--help)  sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)  usage; exit 0 ;;
     "")         die "missing command: plan or apply" ;;
     *)          die "unknown command: $1 (use plan or apply)" ;;
   esac
@@ -151,7 +154,7 @@ main() {
       --description) [ $# -ge 2 ] || die "--description needs a value"; description="$2"; shift 2 ;;
       --no-readme)   readme=0; shift ;;
       --protocol)    [ $# -ge 2 ] || die "--protocol needs a value"; PROTOCOL="$2"; shift 2 ;;
-      -h|--help)     sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      -h|--help)     usage; exit 0 ;;
       -*)            die "unknown option: $1" ;;
       *)             [ -z "$repo" ] || die "only one repository allowed"; repo="$1"; shift ;;
     esac

@@ -142,6 +142,26 @@ teardown() { cleanup_sandbox; }
   [ "$(cat "$SANDBOX/.memory/MEMORY.md")" = '- [A](a.md) — hook' ]
 }
 
+@test "opencode warns for each ask rule an existing opencode.json lacks" {
+  # copy_once keeps an existing opencode.json, so a rule added later never reaches it.
+  grep -vF '"skills/repo-create/scripts/repo-create.sh apply *": "ask"' \
+    "$SANDBOX/providers/opencode/opencode.json" > "$SANDBOX/opencode.json"
+  run bash "$SANDBOX/setup.sh" --provider opencode
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[warn] opencode.json lets OpenCode run repo-create.sh apply without asking"* ]] || false
+  [[ "$output" == *'"skills/repo-create/scripts/repo-create.sh apply *": "ask"'* ]] || false
+  [[ "$output" != *"plugin-manage.sh apply without asking"* ]] || false
+
+  echo '{"model":"x"}' > "$SANDBOX/opencode.json"
+  run bash "$SANDBOX/setup.sh" --provider opencode
+  [[ "$output" == *"run plugin-manage.sh apply without asking"* ]] || false
+  [[ "$output" == *"run repo-create.sh apply without asking"* ]] || false
+
+  cp "$SANDBOX/providers/opencode/opencode.json" "$SANDBOX/opencode.json"
+  run bash "$SANDBOX/setup.sh" --provider opencode
+  [[ "$output" != *"without asking"* ]] || false
+}
+
 @test "on windows, claude settings get the C:/ style root and skills a junction" {
   ln -s "$SANDBOX" "$BATS_TEST_TMPDIR/win-root"
   fake_os MINGW64_NT-10.0 "$BATS_TEST_TMPDIR/win-root"
