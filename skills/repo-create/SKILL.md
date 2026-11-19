@@ -44,8 +44,9 @@ All the work is done by `scripts/repo-create.sh` (in this skill's folder), run f
 | Output | Exit | What to do |
 |---|---|---|
 | `CREATED <owner>/<name> <path>` | 0 | Report the repo and the path. Offer `worktree-create` to start working on it. Done. |
-| `NOT_CLONED <owner>/<name> <url>` | 14 | The repo **was created** on GitHub but the clone failed (the git error is on stderr). Say so, and offer to clone it with the `repo-clone` skill. Never run `apply` again: the repo already exists. |
-| error on stderr | 3 | `gh repo create` failed (permissions in the organization, name taken, network). Nothing was created. Show the gh error. |
+| `NOT_CLONED <owner>/<name> <url>` | 14 | The repo **exists** on GitHub (created now, even if `gh repo create` reported an error after creating it) but it was not cloned; the reason is on stderr. Say so, and offer to clone it with the `repo-clone` skill. Never run `apply` again: the repo already exists. |
+| error on stderr | 3 | `gh repo create` failed (permissions in the organization, name taken, network). Show the gh error. If it says `nothing was created`, nothing was. If it says to run plan, the repo may exist: run `plan` again and follow its status (`REMOTE_EXISTS` → offer `repo-clone`). |
+| no status line, any other exit (e.g. 130 after Ctrl-C) | other | `apply` was interrupted and the repo may exist. Run `plan` again and follow its status. |
 
 ## Rules
 

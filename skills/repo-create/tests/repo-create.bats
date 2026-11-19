@@ -11,6 +11,7 @@ write_gh_stub() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$GH_LOG"
+printf '%s\n' "${GH_HOST:-}" >> "$GH_LOG.host"
 git_q() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
 not_found() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 case "$1 ${2:-}" in
@@ -23,6 +24,7 @@ case "$1 ${2:-}" in
       repos/*)
         r="$REMOTES/${2#repos/}.git"
         [ -d "$r" ] || not_found
+        if [ -n "${GH_BAD_CLONE_URL:-}" ]; then r="$r-missing"; fi
         echo "file://$r file://${r%/*}/./${r##*/}" ;;
     esac ;;
   "repo create")
@@ -40,6 +42,7 @@ case "$1 ${2:-}" in
         rm -rf "$w" ;;
     esac
     [ -z "${GH_BREAK_AFTER_CREATE:-}" ] || rm -rf "$r"
+    [ -z "${GH_FAIL_AFTER_CREATE:-}" ] || { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
     echo "https://github.com/$3" ;;
   *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;
 esac
@@ -167,15 +170,56 @@ teardown() { rm -rf "$TMP"; }
 @test "a failed gh repo create is exit 3 and clones nothing" {
   GH_CREATE_FAIL=1 run "$SCRIPT" apply my-org/my-repo
   [ "$status" -eq 3 ]
-  [[ "$output" == *"gh repo create failed"* ]] || false
+  [[ "$output" == *"gh repo create failed for my-org/my-repo; nothing was created"* ]] || false
   [ ! -e "$SRC/my-repo" ]
 }
 
 @test "NOT_CLONED when the repo was created but the clone fails" {
-  GH_BREAK_AFTER_CREATE=1 run "$SCRIPT" apply my-org/my-repo
+  GH_BAD_CLONE_URL=1 run "$SCRIPT" apply --protocol ssh my-org/my-repo
   [ "$status" -eq 14 ]
-  [ "${lines[${#lines[@]}-1]}" = "NOT_CLONED my-org/my-repo https://github.com/my-org/my-repo" ]
+  [ "${lines[${#lines[@]}-1]}" = "NOT_CLONED my-org/my-repo file://$REMOTES/my-org/my-repo.git-missing" ]
+  [[ "$output" == *"git clone failed"* ]] || false
+  [ -d "$REMOTES/my-org/my-repo.git" ]
   [ ! -e "$SRC/my-repo" ]
+}
+
+@test "NOT_CLONED with the URL of the chosen protocol when the repo cannot be looked up after creating it" {
+  GH_BREAK_AFTER_CREATE=1 run "$SCRIPT" apply --protocol ssh my-org/my-repo
+  [ "$status" -eq 14 ]
+  [ "${lines[${#lines[@]}-1]}" = "NOT_CLONED my-org/my-repo git@github.com:my-org/my-repo.git" ]
+  GH_BREAK_AFTER_CREATE=1 run "$SCRIPT" apply --protocol https my-org/other
+  [ "${lines[${#lines[@]}-1]}" = "NOT_CLONED my-org/other https://github.com/my-org/other.git" ]
+}
+
+@test "a gh repo create that fails after creating the repo still clones it" {
+  GH_FAIL_AFTER_CREATE=1 run "$SCRIPT" apply my-org/my-repo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warning: gh repo create failed, but my-org/my-repo exists"* ]] || false
+  [ "${lines[${#lines[@]}-1]}" = "CREATED my-org/my-repo $SRC/my-repo" ]
+  [ -f "$SRC/my-repo/README.md" ]
+}
+
+@test "every gh call goes to github.com, whatever gh's default host" {
+  GH_HOST=ghe.example.com run "$SCRIPT" apply my-org/my-repo
+  [ "$status" -eq 0 ]
+  [ "$(sort -u "$GH_LOG.host")" = "github.com" ]
+}
+
+@test "apply stops at NO_AUTH and NO_OWNER without creating anything" {
+  GH_AUTH_FAIL=1 run "$SCRIPT" apply my-org/my-repo
+  [ "$status" -eq 4 ]
+  run "$SCRIPT" apply nobody/my-repo
+  [ "$status" -eq 13 ]
+  ! grep -q '^repo create' "$GH_LOG" || false
+}
+
+@test "a symlink at source/<name> is refused" {
+  mkdir -p "$SRC" "$TMP/elsewhere"
+  ln -s "$TMP/elsewhere" "$SRC/my-repo"
+  run "$SCRIPT" apply my-org/my-repo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"symlink"* ]] || false
+  ! grep -q '^repo create' "$GH_LOG" || false
 }
 
 # --- validation ----------------------------------------------------------

@@ -98,6 +98,12 @@ pick_url() {
   if [ "$protocol" = "ssh" ]; then echo "${urls%% *}"; else echo "${urls#* }"; fi
 }
 
+# Clone URL of the chosen protocol when GitHub cannot be asked for it.
+fallback_url() {
+  local repo="$1" protocol="$2"
+  if [ "$protocol" = "ssh" ]; then echo "git@$GH_HOST_NAME:$repo.git"; else echo "https://$GH_HOST_NAME/$repo.git"; fi
+}
+
 # Checks shared by plan and apply. Prints a status and exits when the repo cannot be created.
 check_all() {
   local repo="$1" dest="$2" owner="${1%%/*}" rc=0 urls
@@ -166,7 +172,8 @@ main() {
   local root dest
   root="$(resolve_root)"
   dest="$root/source/$name"
-  export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1
+  # GH_HOST: gh api and gh repo create go to github.com, the host checked by NO_AUTH, not gh's default.
+  export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1 GH_HOST="$GH_HOST_NAME"
 
   check_all "$repo" "$dest"
 
@@ -186,17 +193,25 @@ main() {
   create_args=(repo create "$repo" "--$visibility")
   if [ -n "$description" ]; then create_args+=(--description "$description"); fi
   if [ "$readme" -eq 1 ]; then create_args+=(--add-readme); fi
-  if ! gh "${create_args[@]}" >&2; then
-    echo "error: gh repo create failed for $repo" >&2
+  local urls url rc=0 created=1
+  if ! gh "${create_args[@]}" >&2; then created=0; fi
+
+  # Look the repo up even after a failed create: the API may have created it before failing.
+  urls="$(remote_urls "$repo")" || rc=$?
+  if [ "$created" -eq 0 ] && [ "$rc" -eq 1 ]; then
+    echo "error: gh repo create failed for $repo; nothing was created" >&2
     exit "$EXIT_GITHUB"
   fi
-
-  local urls url rc=0
-  urls="$(remote_urls "$repo")" || rc=$?
+  if [ "$created" -eq 0 ] && [ "$rc" -ne 0 ]; then
+    echo "error: gh repo create failed for $repo and it could not be looked up; run plan to check whether it exists" >&2
+    exit "$EXIT_GITHUB"
+  fi
   if [ "$rc" -ne 0 ]; then
-    echo "NOT_CLONED $repo https://$GH_HOST_NAME/$repo"
+    echo "error: could not look up $repo after creating it" >&2
+    echo "NOT_CLONED $repo $(fallback_url "$repo" "$PROTOCOL")"
     exit "$EXIT_NOT_CLONED"
   fi
+  if [ "$created" -eq 0 ]; then echo "warning: gh repo create failed, but $repo exists on GitHub" >&2; fi
   url="$(pick_url "$urls" "$PROTOCOL")"
 
   local out
