@@ -10,8 +10,8 @@ Always through the `plugin-manage` skill. Each change is two steps: a plan that 
 
 | Need | Plan | Then |
 |---|---|---|
-| Install | `plugin-manage add [--ref <tag>] <url>`: source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> <url>`: clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
-| Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --ref <ref> <name>` |
+| Install | `plugin-manage add [--ref <tag>] <url>`: source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> --adopted <0|1> <url>` (both from the plan's `CONFIRM_ADD`): clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
+| Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --adopted <0|1> --ref <ref> <name>` (from `CONFIRM_UPDATE`) |
 | Remove | `plugin-manage remove <name>` | `apply remove <name>`: runs `uninstall`, removes the links, the clone, the state and its rules |
 | List | `plugin-manage list` | State `OK`, `BROKEN_LINK`, `MODIFIED`, `INSTALL_FAILED` or `UNMANAGED` |
 | Restore links | `./setup.sh --provider <p>` | Relinks the installed plugins and renders their rules |
@@ -63,7 +63,8 @@ allow.opencode=my-tool *
 | `skills` | no | Space-separated names; each has `skills/<n>/SKILL.md` with `name: <n>` |
 | `agents` | no | Space-separated names; each has `agents/<n>.md` with `name: <n>` |
 | `requires` | no | System commands that must be installed; checked, never installed |
-| `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet; after `install` all of them must |
+| `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet, unless adopted (`adopt`); after `install` all of them must |
+| `adopt` | no, repeatable | `<command> <path under $HOME>`: where the plugin's `install` puts a command it provides, e.g. `adopt=my-tool .local/share/uv/tools/my-plugin/bin/my-tool`. The path ends in `/<command>` and has a folder named like the plugin (`name`), as uv tool's `<tool dir>/<plugin>/bin/<command>`. A command already on the `PATH` whose link chain goes through that path is the plugin's own, installed by it from another arness or by hand: it is adopted instead of refused. See *Shared commands* |
 | `install` / `uninstall` | no | Command run in the plugin folder after add or update / before remove. No time limit |
 | `hook.<event>` | no, one per event | Command arness runs in the plugin folder on `<event>`, with the event's arguments appended. See *Hooks* |
 | `allow.claude` | no, repeatable | Claude Code rule, rendered into `.claude/settings.json` together with `Skill(<n>)` for each skill. That file is generated: every `apply` renders it again from `providers/claude/settings.json` and the plugin rules, so a line added there by hand is lost (the plan lists it as `DROPPED_SETTING`). Your own rules go in `.claude/settings.local.json` |
@@ -90,6 +91,14 @@ A rule is `Bash(<command> [args])` (OpenCode: `<command> [args]`) for a `<comman
 System commands from `requires` get no rules: `Bash(uv --version)` or `Bash(rm -rf x)` is `BAD_RULE`. The agent asks before running them, as it does for any command.
 
 A command that runs arbitrary code from its arguments is also refused in `provides`: shells, `env`, `sudo`, `xargs`, `git`, `find`, `ssh`, `curl`, `docker`, package managers (`uv`, `npm`, `pip`, `cargo`, `go`...) and interpreters, versioned names included (`python3.12`, `node20`, `gawk`). See `RUNNERS` and `RUNNER_RE` in the script. Other tools (`Read(...)`, `Write(...)`, `WebFetch(...)`) are not accepted at all. Any violation is `BAD_RULE`. The example manifest above is checked by the tests (`plugin-manage.bats`), so it always passes `check`.
+
+### Shared commands
+
+A command such as `uv tool install` puts is installed once per machine, not per arness. When every command in `provides` is already installed at its `adopt` path, `add` adopts them: the plan shows `ADOPT <command> <path>` and `INSTALL_SKIPPED`, `apply` does not run `install`, and the state records `adopted=1`. The plan's confirmation line ends with that decision (`1` adopted, `0` not) and `apply` takes it back as `--adopted`: if the command appeared or went away since the plan, `apply` stops with `ADOPTION_CHANGED` and writes nothing, so what runs is what was shown. Then `remove` does not run `uninstall` (`UNINSTALL_SKIPPED`), so the other arness keeps its command, and `update` does not run `install` while the command is there; once it is gone, `update` installs it and this arness owns it from then on. A plugin this arness installed itself keeps running `install` on every update.
+
+A command is adopted only when its `adopt` path is one of the paths on its link chain, from the one `command -v` finds to the file, not just a link to the same file: commands that share one binary (mise shims) do not match each other. Adopting only some of the provided commands is refused (`BAD_MANIFEST adopt: <a> is adopted but <b> is not installed`): `install` would run over the shared ones and a later `remove` would uninstall them. An empty `$HOME`, or `$HOME` set to `/`, adopts nothing.
+
+Only paths are compared, nothing of the plugin runs before you confirm. A command at any other path is still refused, so `adopt` cannot claim a system command or one under `$HOME` that another tool installed, unless that tool's install folder is named like the plugin: a plugin called `gh` could adopt a `gh` installed in `.../gh/bin/gh`. That is why the plan's `ADOPT` line shows the adopted path, its folders resolved: check that it is where this plugin installs its command before you confirm.
 
 ## Providers
 

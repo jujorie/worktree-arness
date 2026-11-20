@@ -6,8 +6,8 @@
 # Usage: plugin-manage.sh add [--ref REF] <url>                       plan only, writes nothing
 #        plugin-manage.sh update [--ref REF] [--no-fetch] <name>      plan only (fetches)
 #        plugin-manage.sh remove <name>                               plan only
-#        plugin-manage.sh apply add --commit SHA [--ref REF] <url>
-#        plugin-manage.sh apply update --commit SHA [--ref REF] <name>
+#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url>
+#        plugin-manage.sh apply update --commit SHA --adopted 0|1 [--ref REF] <name>
 #        plugin-manage.sh apply remove [--force] <name>
 #        plugin-manage.sh list
 #        plugin-manage.sh check <dir>
@@ -37,11 +37,20 @@
 #   HOOK <event> <cmd>                    plan: command arness runs in the plugin folder on <event>
 #   HOOK <name> <line>                    run-hook: a line the plugin's hook printed
 #   HOOK_FAILED <name> <exit|modified|missing>  run-hook: that hook failed or was not run (exit 15)
+#   ADOPT <command> <path>                a provided command already installed at the path its adopt= line
+#                                         declares (e.g. by this plugin from another arness): that path,
+#                                         ending in /<command> under a folder named after the plugin, is
+#                                         on the command's link chain. It is used as it is; adopting only
+#                                         some of the provided commands is BAD_MANIFEST
+#   INSTALL_SKIPPED <cmd> | UNINSTALL_SKIPPED <cmd>
+#                                         every provided command is adopted: apply does not run install,
+#                                         and remove does not run uninstall (the command is not ours)
 #   DROPPED_SETTING <line>                a line of .claude/settings.json edited by hand (no template or
 #                                         plugin rule gives it): apply renders the file again and loses
 #                                         it. Move it to .claude/settings.local.json before apply
-#   CONFIRM_ADD <name> <commit>           plan printed; nothing written (exit 20)
-#   CONFIRM_UPDATE <name> <from> <to> <ref>   plan printed; nothing written (exit 20)
+#   CONFIRM_ADD <name> <commit> <adopted> plan printed; nothing written (exit 20). <adopted> is 1 when
+#                                         install is skipped (ADOPT), else 0: apply takes it as --adopted
+#   CONFIRM_UPDATE <name> <from> <to> <ref> <adopted>   plan printed; nothing written (exit 20)
 #   CONFIRM_REMOVE <name>                 plan printed; nothing written (exit 20)
 #   ADDED <name> <path>                   cloned, linked, rules rendered, install run
 #   UPDATED <name> <from> <to>            moved to <to>, links and rules refreshed, install run
@@ -65,9 +74,12 @@
 #   NOT_INSTALLED <name>                  (exit 12)
 #   INSTALL_FAILED <name>                 install command failed; clone and links kept (exit 13)
 #   MISMATCH <expected> <actual>          --commit is not what the plan resolved to (exit 14)
+#   ADOPTION_CHANGED <expected> <actual>  --adopted is not what apply finds now: the adopted command
+#                                         appeared or went away since the plan; nothing written (exit 14)
 # Exit codes: 0 ok, 2 invalid usage, 3 clone or fetch failed, 4 invalid plugin, 5 missing requirement,
-#   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch,
-#   15 a hook failed, 20 plan printed, confirmation needed.
+#   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch
+#   (MISMATCH, ADOPTION_CHANGED), 15 a hook failed,
+#   20 plan printed, confirmation needed.
 set -euo pipefail
 
 EXIT_USAGE=2 EXIT_GIT=3 EXIT_INVALID=4 EXIT_REQUIREMENT=5 EXIT_CONFLICT=6
@@ -86,6 +98,8 @@ OPENCODE_RULE_RE='^([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?$'
 HOOK_EVENTS=" worktree-remove "
 # A hook command: a relative path to an executable of the plugin, then literal arguments.
 HOOK_RE='^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)(( [A-Za-z0-9._/=:@+,-]+)*)$'
+# adopt=<command> <path relative to $HOME>
+ADOPT_RE='^([A-Za-z0-9._-]+) ([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$'
 # Commands that run arbitrary code from their arguments: no rule may name them, even with literal
 # arguments. Versioned names (python3.12, node20, gawk) are caught by RUNNER_RE.
 RUNNERS=" bash sh zsh dash ksh fish csh tcsh pwsh powershell env sudo su doas xargs eval exec command nohup"
@@ -96,6 +110,7 @@ RUNNER_RE='^(python|pypy|node|nodejs|ruby|perl|php|lua|luajit|g?awk|mawk|nawk|gs
 OPENCODE_APPLY_RULE='"skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"'
 
 ROOT="" PLUGINS=""
+ADOPTED=0    # 1: every provided command is adopted, install and uninstall do not run (check_provides)
 TMP_DIR=""   # global: the EXIT trap runs after main() returns
 cleanup() { if [ -n "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi; }
 
@@ -154,7 +169,7 @@ is_slug() { [[ $1 =~ $SLUG_RE ]]; }
 parse_manifest() {
   local file="$1" line key value n=0 seen=" "
   M_NAME="" M_VERSION="" M_PREFIX="" M_ARNESS="" M_DESC="" M_SKILLS="" M_AGENTS="" M_REQUIRES="" M_PROVIDES=""
-  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE="" M_HOOKS=""
+  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE="" M_HOOKS="" M_ADOPT=""
   [ -f "$file" ] || fail "$EXIT_INVALID" "BAD_MANIFEST missing $MANIFEST"
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -169,6 +184,7 @@ parse_manifest() {
     case "$key" in
       allow.claude)   M_ALLOW_CLAUDE="${M_ALLOW_CLAUDE}${value}"$'\n'; continue ;;
       allow.opencode) M_ALLOW_OPENCODE="${M_ALLOW_OPENCODE}${value}"$'\n'; continue ;;
+      adopt)          M_ADOPT="${M_ADOPT}${value}"$'\n'; continue ;;
       name|version|prefix|arness|description|skills|agents|requires|provides|install|uninstall) ;;
       hook.*)
         case "$HOOK_EVENTS" in
@@ -256,6 +272,27 @@ check_names() {
   done
 }
 
+# check_adopt: each adopt line is "<command> <path>", once per command, for a command in provides,
+# with a plain relative path (no "..", ".", empty segments or leading /) that is read under $HOME,
+# ends in /<command> and has a folder named after the plugin (as uv tool's <tool dir>/<plugin>/bin/<cmd>),
+# so it cannot name the install folder of another tool (mise, cargo, go) for a command the user has.
+check_adopt() {
+  local line c p seen=" " seg
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [[ $line =~ $ADOPT_RE ]] || fail "$EXIT_INVALID" "BAD_MANIFEST adopt: not <command> <path under \$HOME>: $line"
+    c="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}"
+    case " $M_PROVIDES " in *" $c "*) ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $c is not in provides" ;; esac
+    case "$seen" in *" $c "*) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: duplicate command $c" ;; esac
+    seen="$seen$c "
+    for seg in ${p//\// }; do
+      case "$seg" in .|..) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p has a . or .. segment" ;; esac
+    done
+    case "$p" in */"$c") ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p does not end in /$c" ;; esac
+    case "/$p" in */"$M_NAME"/*) ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p has no folder named $M_NAME" ;; esac
+  done <<< "$M_ADOPT"
+}
+
 # validate_plugin <dir>: parse and check the manifest and that what it declares exists.
 validate_plugin() {
   local dir="$1" rule
@@ -283,6 +320,7 @@ validate_plugin() {
   while IFS= read -r hook; do
     if [ -n "$hook" ]; then check_hook "${hook%%=*}" "${hook#*=}" "$dir"; fi
   done <<< "$M_HOOKS"
+  check_adopt
   while IFS= read -r rule; do
     if [ -n "$rule" ]; then check_rule claude "$rule"; fi
   done <<< "$M_ALLOW_CLAUDE"
@@ -298,13 +336,64 @@ check_requirements() {
   done
 }
 
-# check_provides_free: before a first install, a command the plugin says it provides must not exist
-# yet, or its " *" rule would grant a system command (provides=rm).
-check_provides_free() {
-  local c
+# physical_path <path>: the path with its folder resolved physically (cd -P) and its last component
+# kept as it is, so a link is named, not followed; fails when the folder does not exist.
+physical_path() {
+  local d
+  d="$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "${d%/}" "$(basename "$1")"
+}
+
+# adopted_path <command>: the declared path ($HOME/<path> of its adopt= line) when it is one of the
+# paths on the command's link chain, from `command -v` to the file, each named physically; empty
+# otherwise. Only the chain counts, not the file at its end: commands that share one binary (mise
+# shims) do not match each other's path. An empty $HOME, or one that is /, adopts nothing. Nothing of
+# the plugin runs: the paths are only compared (one readlink per hop: portable to BSD readlink).
+adopted_path() {
+  local c="$1" rel home want p t n=0
+  rel="$(printf '%s' "$M_ADOPT" | awk -v c="$c" '$1 == c { print $2; exit }')"
+  [ -n "$rel" ] && [ -n "${HOME:-}" ] || return 0
+  home="$(cd -P "$HOME" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$home" ] && [ "$home" != / ] || return 0
+  want="$(physical_path "$home/$rel")" || return 0
+  p="$(command -v "$c" 2>/dev/null)" || return 0
+  case "$p" in /*) ;; *) return 0 ;; esac
+  while [ "$n" -le 40 ]; do
+    if [ "$(physical_path "$p")" = "$want" ]; then
+      if [ -e "$p" ]; then printf '%s\n' "$want"; fi
+      return 0
+    fi
+    [ -L "$p" ] || return 0
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$((n + 1))
+  done
+}
+
+# check_provides <old provides> <old adopted>: a command the plugin provides must not exist yet (or
+# its " *" rule would grant a system command, provides=rm) unless the installed version already
+# provided it or it is adopted: installed at its adopt= path. Sets ADOPTED=1 when install is not to
+# run: every provided command is adopted, on a first install or when the installed version was
+# adopted too (one this arness installed keeps being updated by it). Adopting only some of them is
+# refused there: install would run over the shared ones and a later remove would uninstall them.
+check_provides() {
+  local old="$1" old_adopted="$2" c n=0 a=0 first_a="" first_not=""
   for c in $M_PROVIDES; do
+    n=$((n + 1))
+    if [ -n "$(adopted_path "$c")" ]; then
+      a=$((a + 1))
+      if [ -z "$first_a" ]; then first_a="$c"; fi
+      continue
+    fi
+    if [ -z "$first_not" ]; then first_not="$c"; fi
+    case " $old " in *" $c "*) continue ;; esac
     if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi
   done
+  if [ "$old_adopted" = 1 ] && [ -n "$first_a" ] && [ -n "$first_not" ]; then
+    fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $first_a is adopted but $first_not is not installed"
+  fi
+  ADOPTED=0
+  if [ "$n" -gt 0 ] && [ "$a" -eq "$n" ] && [ "$old_adopted" = 1 ]; then ADOPTED=1; fi
 }
 
 # Warn in the plan when an existing opencode.json (copied once, never updated) lacks the rule that
@@ -345,8 +434,14 @@ print_plan() {
       if [ -f "$f" ]; then echo "OPENCODE_AUTO_ALLOW skills/$n/scripts/$(basename "$f")"; fi
     done
   done
-  if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
-  if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+  if [ "$ADOPTED" = 1 ]; then
+    for n in $M_PROVIDES; do echo "ADOPT $n $(adopted_path "$n")"; done
+    if [ -n "$M_INSTALL" ]; then echo "INSTALL_SKIPPED $M_INSTALL"; fi
+    if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL_SKIPPED $M_UNINSTALL"; fi
+  else
+    if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
+    if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+  fi
   printf '%s' "$M_HOOKS" | awk 'NF { i = index($0, "="); print "HOOK " substr($0, 1, i - 1) " " substr($0, i + 1) }'
   check_opencode_gate
   print_dropped
@@ -368,7 +463,7 @@ write_state() {
   file="$(state_file "$1")"
   tmp="$file.tmp"
   {
-    printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\n' "$2" "$3" "$4" "$5"
+    printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\nadopted=%s\n' "$2" "$3" "$4" "$5" "$ADOPTED"
     printf 'version=%s\nskills=%s\nagents=%s\nprovides=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_PROVIDES" "$M_UNINSTALL"
     claude_rules | awk 'NF { print "allow.claude=" $0 }'
     printf '%s' "$M_ALLOW_OPENCODE" | awk 'NF { print "allow.opencode=" $0 }'
@@ -467,9 +562,11 @@ run_cmd() {
   (cd "$1" && unset ARNESS_ROOT GIT_ALLOW_PROTOCOL GIT_TERMINAL_PROMPT && bash -c "$2") >&2
 }
 
+# run_install <name> <dir>: run install unless every provided command is adopted, then check that
+# each provided command is on the PATH.
 run_install() {
   local name="$1" dir="$2" c
-  if [ -n "$M_INSTALL" ] && ! run_cmd "$dir" "$M_INSTALL"; then
+  if [ "$ADOPTED" != 1 ] && [ -n "$M_INSTALL" ] && ! run_cmd "$dir" "$M_INSTALL"; then
     set_status "$name" install-failed
     fail "$EXIT_INSTALL" "INSTALL_FAILED $name"
   fi
@@ -550,16 +647,17 @@ prepare_add() {
   validate_plugin "$ADD_DIR"
   check_requirements
   if [ -e "$PLUGINS/$M_NAME" ] || [ -L "$PLUGINS/$M_NAME" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
-  check_provides_free
+  check_provides "" 1
   check_conflicts "$M_NAME"
 }
 
 parse_add_args() {
-  ARG_URL="" ARG_REF="" ARG_COMMIT=""
+  ARG_URL="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
       --commit) [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
+      --adopted) [ $# -ge 2 ] || die "--adopted needs a value"; ARG_ADOPTED="$2"; shift 2 ;;
       -*)       die "unknown option: $1" ;;
       *)        [ -z "$ARG_URL" ] || die "only one URL allowed"; ARG_URL="$1"; shift ;;
     esac
@@ -568,21 +666,25 @@ parse_add_args() {
   validate_url "$ARG_URL" || die "invalid URL (allowed: https://, ssh://, git@host:path, file://): $ARG_URL"
   if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
   if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
+  case "$ARG_ADOPTED" in ""|0|1) ;; *) die "invalid --adopted (0 or 1): $ARG_ADOPTED" ;; esac
 }
 
 cmd_add() {
   parse_add_args "$@"
-  [ -z "$ARG_COMMIT" ] || die "--commit belongs to 'apply add'"
+  [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply add'"
   prepare_add "$ARG_URL" "$ARG_REF"
   print_plan "$ADD_COMMIT" "$ARG_URL" "$ADD_REF" "$ADD_KIND" "$ADD_DIR"
-  fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT"
+  fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT $ADOPTED"
 }
 
 apply_add() {
   parse_add_args "$@"
   validate_full_commit "$ARG_COMMIT" || die "apply add needs --commit <full 40-character sha> from the plan (CONFIRM_ADD)"
+  [ -n "$ARG_ADOPTED" ] || die "apply add needs --adopted 0|1 from the plan (CONFIRM_ADD)"
   prepare_add "$ARG_URL" "$ARG_REF"
   [ "$ARG_COMMIT" = "$ADD_COMMIT" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $ADD_COMMIT"
+  # What runs is what the plan showed: install skipped (ADOPT) or not.
+  [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
   local dest="$PLUGINS/$M_NAME"
   mv "$ADD_DIR" "$dest"
   link_plugin "$M_NAME" "$M_SKILLS" "$M_AGENTS"
@@ -634,24 +736,19 @@ prepare_update() {
   validate_plugin "$TMP_DIR/tree"
   [ "$M_NAME" = "$name" ] || fail "$EXIT_INVALID" "BAD_MANIFEST name changed from $name to $M_NAME"
   check_requirements
-  # Commands provided since the installed version must not exist yet, like on a first install.
-  local c old_provides
-  old_provides="$(state_value "$name" provides)"
-  for c in $M_PROVIDES; do
-    case " $old_provides " in
-      *" $c "*) ;;
-      *) if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi ;;
-    esac
-  done
+  # Commands provided since the installed version must not exist yet, like on a first install. A state
+  # written before adopt existed has no adopted line: install ran, so it is ours.
+  check_provides "$(state_value "$name" provides)" "$(state_value "$name" adopted)"
   check_conflicts "$name"
 }
 
 parse_name_args() {
-  ARG_NAME="" ARG_REF="" ARG_COMMIT="" ARG_FETCH=1 ARG_FORCE=0
+  ARG_NAME="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED="" ARG_FETCH=1 ARG_FORCE=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)      [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
       --commit)   [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
+      --adopted)  [ $# -ge 2 ] || die "--adopted needs a value"; ARG_ADOPTED="$2"; shift 2 ;;
       --no-fetch) ARG_FETCH=0; shift ;;
       --force)    ARG_FORCE=1; shift ;;
       -*)         die "unknown option: $1" ;;
@@ -662,11 +759,12 @@ parse_name_args() {
   is_slug "$ARG_NAME" || die "invalid plugin name: $ARG_NAME"
   if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
   if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
+  case "$ARG_ADOPTED" in ""|0|1) ;; *) die "invalid --adopted (0 or 1): $ARG_ADOPTED" ;; esac
 }
 
 cmd_update() {
   parse_name_args "$@"
-  [ -z "$ARG_COMMIT" ] || die "--commit belongs to 'apply update'"
+  [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply update'"
   [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
   local name="$ARG_NAME" state rule
   prepare_update "$name" "$ARG_REF" "$ARG_FETCH"
@@ -679,18 +777,20 @@ cmd_update() {
   while IFS= read -r rule; do
     if [ -n "$rule" ] && ! conf_value "$state" allow.opencode | grep -qxF -- "$rule"; then echo "NEW_ALLOW opencode $rule"; fi
   done <<< "$M_ALLOW_OPENCODE"
-  fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $UP_OLD $UP_TARGET $UP_REF"
+  fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $UP_OLD $UP_TARGET $UP_REF $ADOPTED"
 }
 
 # No fetch: apply moves to what the plan fetched and showed, or reports MISMATCH.
 apply_update() {
   parse_name_args "$@"
   validate_full_commit "$ARG_COMMIT" || die "apply update needs --commit <full 40-character sha> from the plan (CONFIRM_UPDATE)"
+  [ -n "$ARG_ADOPTED" ] || die "apply update needs --adopted 0|1 from the plan (CONFIRM_UPDATE)"
   [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
   local name="$ARG_NAME"
   prepare_update "$name" "$ARG_REF" 0
   if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
   [ "$ARG_COMMIT" = "$UP_TARGET" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $UP_TARGET"
+  [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
   # Detached: no local branch is created or reset, so nothing local can be lost.
   git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
   unlink_plugin "$name"
@@ -706,28 +806,31 @@ apply_update() {
 
 cmd_remove() {
   parse_name_args "$@"
-  [ -z "$ARG_REF$ARG_COMMIT" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
+  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
   local name="$ARG_NAME" n uninstall
   [ -d "$PLUGINS/$name" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
   echo "PLUGIN $name $(state_value "$name" version | sed 's/^$/-/') $(state_value "$name" commit | sed 's/^$/-/')"
   for n in $(state_value "$name" skills); do echo "SKILL $n"; done
   for n in $(state_value "$name" agents); do echo "AGENT $n"; done
   uninstall="$(state_value "$name" uninstall)"
-  if [ -n "$uninstall" ]; then echo "UNINSTALL $uninstall"; fi
+  if [ -n "$uninstall" ]; then
+    if [ "$(state_value "$name" adopted)" = 1 ]; then echo "UNINSTALL_SKIPPED $uninstall"; else echo "UNINSTALL $uninstall"; fi
+  fi
   print_dropped
   fail "$EXIT_CONFIRM" "CONFIRM_REMOVE $name"
 }
 
 apply_remove() {
   parse_name_args "$@"
-  [ -z "$ARG_REF$ARG_COMMIT" ] || die "apply remove takes only --force and a plugin name"
+  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED" ] || die "apply remove takes only --force and a plugin name"
   local name="$ARG_NAME" dest="$PLUGINS/$ARG_NAME" why uninstall
   [ -d "$dest" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
   why="$(dirty_reason "$dest" "$(state_value "$name" commit)")"
   if [ -n "$why" ] && [ "$ARG_FORCE" -eq 0 ]; then fail "$EXIT_DIRTY" "DIRTY $dest $why"; fi
   # From the state, not the clone: a manifest changed since apply must not choose what runs here.
+  # An adopted command was installed by someone else (this plugin in another arness): left in place.
   uninstall="$(state_value "$name" uninstall)"
-  if [ -n "$uninstall" ]; then
+  if [ -n "$uninstall" ] && [ "$(state_value "$name" adopted)" != 1 ]; then
     run_cmd "$dest" "$uninstall" || echo "warning: uninstall failed, removing anyway: $uninstall" >&2
   fi
   unlink_plugin "$name"

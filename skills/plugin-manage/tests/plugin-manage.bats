@@ -53,14 +53,14 @@ setup() {
 
 teardown() { cleanup_sandbox; }
 
-add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/null 2>&1; }
+add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" --adopted "${ADOPT:-0}" "$@" "$URL" >/dev/null 2>&1; }
 
 # --- add (plan) ------------------------------------------------------------------
 
 @test "add prints everything the user consents to and writes nothing" {
   run "$SCRIPT" add "$URL"
   [ "$status" -eq 20 ]
-  [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head)" ]
+  [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head) 0" ]
   for l in "PLUGIN demo 0.1.0 $(origin_head)" "SOURCE $URL main branch" "DESCRIPTION Demo plugin for tests" \
            "REQUIRES git" "PROVIDES demo-tool" "SKILL demo-hello" "AGENT demo-helper" "ALLOW claude Skill(demo-hello)" \
            "ALLOW claude Bash(demo-tool *)" "ALLOW opencode demo-tool *" \
@@ -87,7 +87,11 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   [ "$status" -eq 2 ]
   [[ "$output" == *"needs --commit"* ]] || false
   run "$SCRIPT" apply add --commit "$(origin_head | cut -c1-7)" "$URL"
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 2 ] || false
+  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  [ "$status" -eq 2 ] && [[ "$output" == *"needs --adopted 0|1"* ]] || false
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 2 "$URL"
+  [ "$status" -eq 2 ] && [[ "$output" == *"invalid --adopted"* ]] || false
   [ ! -e "$SANDBOX/plugins/demo" ]
 }
 
@@ -117,17 +121,225 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
 }
 
+# install_elsewhere: demo-tool already installed under a fake $HOME at .tools/demo/bin/demo-tool and
+# linked on the PATH, as uv tool install or this plugin from another arness leaves it.
+install_elsewhere() {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.tools/demo/bin"
+  printf '#!/bin/sh\necho elsewhere\n' > "$HOME/.tools/demo/bin/demo-tool"
+  chmod +x "$HOME/.tools/demo/bin/demo-tool"
+  ln -s "$HOME/.tools/demo/bin/demo-tool" "$TOOL"
+}
+
+@test "add adopts a provided command installed at its adopt path: install and uninstall are skipped" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ]
+  real="$(cd -P "$HOME/.tools/demo/bin" && pwd -P)/demo-tool"
+  [[ "$output" == *"ADOPT demo-tool $real"* ]] || false
+  [[ "$output" == *"INSTALL_SKIPPED $INSTALL_CMD"* ]] || false
+  [[ "$output" == *"UNINSTALL_SKIPPED $UNINSTALL_CMD"* ]] || false
+  ! printf '%s\n' "$output" | grep -q '^INSTALL ' || false
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 1 "$URL"
+  [ "$status" -eq 0 ]
+  [ "$(last_line)" = "ADDED demo $SANDBOX/plugins/demo" ]
+  [ ! -e "$SANDBOX/plugins/demo/installed.flag" ]
+  [ "$("$TOOL")" = "elsewhere" ]
+  state | grep -qx 'adopted=1'
+}
+
+@test "apply add is ADOPTION_CHANGED when the adopted command went away or appeared since the plan" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ] && [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head) 1" ] || false
+  rm "$TOOL"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 1 "$URL"
+  [ "$status" -eq 14 ] && [ "$(last_line)" = "ADOPTION_CHANGED 1 0" ] || false
+  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ] && [ ! -L "$SANDBOX/skills/demo-hello" ] || false
+  [ ! -e "$TOOL" ] || false
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ] && [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head) 0" ] || false
+  ln -s "$HOME/.tools/demo/bin/demo-tool" "$TOOL"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 "$URL"
+  [ "$status" -eq 14 ] && [ "$(last_line)" = "ADOPTION_CHANGED 0 1" ] || false
+  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ] || false
+}
+
+@test "apply update is ADOPTION_CHANGED when the adopted command went away since the plan" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  ADOPT=1 add_demo
+  old="$(origin_head)"
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ] && [ "$(last_line)" = "CONFIRM_UPDATE demo $old $(origin_head) main 1" ] || false
+  rm "$TOOL"
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 1 --ref main demo
+  [ "$status" -eq 14 ] && [ "$(last_line)" = "ADOPTION_CHANGED 1 0" ] || false
+  [ "$(git -C "$SANDBOX/plugins/demo" rev-parse HEAD)" = "$old" ] || false
+  state | grep -qx "commit=$old" && state | grep -qx 'adopted=1' || false
+  [ ! -e "$SANDBOX/plugins/demo/installed.flag" ]
+}
+
+@test "a provided command at another path than its adopt line is still BAD_MANIFEST" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/other/demo/bin/demo-tool'
+  commit_origin "adopt elsewhere"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "apply remove of an adopted plugin leaves the command and does not run uninstall" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  ADOPT=1 add_demo
+  run "$SCRIPT" remove demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"UNINSTALL_SKIPPED $UNINSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/uninstalled.flag" ]
+  [ "$("$TOOL")" = "elsewhere" ]
+}
+
+@test "update of an adopted plugin skips install while the command is there, and installs once it is gone" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  ADOPT=1 add_demo
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"INSTALL_SKIPPED $INSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 1 --ref main demo
+  [ "$status" -eq 0 ]
+  [ ! -e "$SANDBOX/plugins/demo/installed.flag" ]
+  state | grep -qx 'adopted=1'
+  rm "$TOOL"
+  edit_conf 's/^version=.*/version=0.3.0/'
+  commit_origin "c3"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"INSTALL $INSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
+  [ "$status" -eq 0 ]
+  [ -f "$SANDBOX/plugins/demo/installed.flag" ]
+  state | grep -qx 'adopted=0'
+}
+
+@test "update of a plugin this arness installed runs install even if the command is at its adopt path" {
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  add_demo
+  state | grep -qx 'adopted=0'
+  rm "$SANDBOX/plugins/demo/installed.flag" "$TOOL"
+  install_elsewhere
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"INSTALL $INSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
+  [ "$status" -eq 0 ]
+  [ -f "$SANDBOX/plugins/demo/installed.flag" ]
+  state | grep -qx 'adopted=0'
+}
+
+@test "check rejects adopt lines that are malformed, repeated, absolute, with .. or not provided" {
+  for line in 'adopt=demo-tool' 'adopt=demo-tool /usr/bin/demo-tool' 'adopt=demo-tool a/../b' 'adopt=demo-tool a b'; do
+    write_conf "$line"
+    run "$SCRIPT" check "$ORIGIN"
+    [ "$status" -eq 4 ] && [[ "$output" == "BAD_MANIFEST adopt: "* ]] || { echo "accepted: $line"; false; }
+  done
+  write_conf 'adopt=rm bin/rm'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: rm is not in provides" ] || false
+  write_conf 'adopt=demo-tool demo/a/demo-tool' 'adopt=demo-tool demo/b/demo-tool'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: duplicate command demo-tool" ] || false
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 0 ]
+}
+
+@test "check rejects an adopt path that does not end in the command or has no folder named after the plugin" {
+  write_conf 'adopt=demo-tool .tools/demo/bin/mise'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: .tools/demo/bin/mise does not end in /demo-tool" ] || false
+  write_conf 'adopt=demo-tool .tools/demo/bin/xdemo-tool'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: .tools/demo/bin/xdemo-tool does not end in /demo-tool" ] || false
+  for p in .local/share/mise/installs/demo-tool/1.0/bin/demo-tool .tools/demox/bin/demo-tool bin/demo-tool; do
+    write_conf "adopt=demo-tool $p"
+    run "$SCRIPT" check "$ORIGIN"
+    [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: $p has no folder named demo" ] || { echo "accepted: $p"; false; }
+  done
+}
+
+@test "a command that only shares its binary with the adopt path (mise shims) is not adopted" {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.shims" "$HOME/.tools/demo/bin"
+  printf '#!/bin/sh\necho multi\n' > "$HOME/.shims/multi"
+  chmod +x "$HOME/.shims/multi"
+  ln -s "$HOME/.shims/multi" "$TOOL"
+  ln -s "$HOME/.shims/multi" "$BATS_TEST_TMPDIR/bin/other-tool"
+  ln -s "$HOME/.shims/multi" "$HOME/.tools/demo/bin/demo-tool"
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt a shim"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "HOME set to / adopts nothing" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  export HOME=/
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "adopting only some of the provided commands is BAD_MANIFEST on add and on update" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  edit_conf 's/^provides=.*/provides=demo-tool demo-other/'
+  commit_origin "two commands"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ] && [ "$(last_line)" = "BAD_MANIFEST adopt: demo-tool is adopted but demo-other is not installed" ] || false
+  edit_conf 's/^provides=.*/provides=demo-tool/'
+  commit_origin "one command"
+  ADOPT=1 add_demo
+  state | grep -qx 'adopted=1' || false
+  edit_conf 's/^provides=.*/provides=demo-tool demo-other/'
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "two commands again"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST adopt: demo-tool is adopted but demo-other is not installed" ]
+}
+
 @test "an install that does not provide its commands is INSTALL_FAILED" {
   edit_conf 's/^install=.*/install=touch installed.flag/'
   commit_origin "no tool"
-  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 "$URL"
   [ "$status" -eq 13 ]
   [ "$(last_line)" = "INSTALL_FAILED demo" ]
   [[ "$output" == *"did not provide the command demo-tool"* ]] || false
 }
 
 @test "apply add clones, links, records the state and runs install" {
-  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 "$URL"
   [ "$status" -eq 0 ]
   [ "$(last_line)" = "ADDED demo $SANDBOX/plugins/demo" ]
   [ "$(readlink "$SANDBOX/skills/demo-hello")" = "../plugins/demo/skills/demo-hello" ]
@@ -182,7 +394,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING "Skill(plugin-manage)"'
   printf '%s\n' "$output" | grep -qxF 'DROPPED_SETTING ]'
   # apply does lose them: that is what the plan warns about.
-  "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo >/dev/null 2>&1
+  "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo >/dev/null 2>&1
   ! grep -qF 'gh pr review' "$SANDBOX/.claude/settings.json" || false
 }
 
@@ -190,7 +402,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   git_q -C "$ORIGIN" tag v0.1.0
   edit_conf 's/^version=.*/version=0.2.0/'
   commit_origin "c2"
-  run "$SCRIPT" apply add --commit "$(git -C "$ORIGIN" rev-parse v0.1.0)" --ref v0.1.0 "$URL"
+  run "$SCRIPT" apply add --commit "$(git -C "$ORIGIN" rev-parse v0.1.0)" --adopted 0 --ref v0.1.0 "$URL"
   [ "$status" -eq 0 ]
   grep -qx 'version=0.1.0' "$SANDBOX/plugins/demo/arness-plugin.conf"
   state | grep -qx 'ref=v0.1.0' && state | grep -qx 'kind=tag' || false
@@ -198,7 +410,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 
 @test "apply add with a commit other than the plan's is a MISMATCH" {
   zeros=0000000000000000000000000000000000000000
-  run "$SCRIPT" apply add --commit "$zeros" "$URL"
+  run "$SCRIPT" apply add --commit "$zeros" --adopted 0 "$URL"
   [ "$status" -eq 14 ]
   [[ "$(last_line)" == "MISMATCH $zeros "* ]] || false
   [ ! -e "$SANDBOX/plugins/demo" ]
@@ -214,7 +426,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 @test "a skill or agent name taken by a real file is a NAME_CONFLICT and stays intact" {
   mkdir -p "$SANDBOX/skills/demo-hello"
   echo mine > "$SANDBOX/skills/demo-hello/SKILL.md"
-  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 "$URL"
   [ "$status" -eq 6 ]
   [ "$(last_line)" = "NAME_CONFLICT skills/demo-hello" ]
   [ "$(cat "$SANDBOX/skills/demo-hello/SKILL.md")" = mine ]
@@ -244,7 +456,7 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
 @test "a failing install is INSTALL_FAILED, keeps the links and shows in list" {
   edit_conf 's/^install=.*/install=exit 3/'
   commit_origin "bad install"
-  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 "$URL"
   [ "$status" -eq 13 ]
   [ "$(last_line)" = "INSTALL_FAILED demo" ]
   [ -L "$SANDBOX/skills/demo-hello" ]
@@ -423,11 +635,11 @@ check_with() {
   new="$(origin_head)"
   run "$SCRIPT" update demo
   [ "$status" -eq 20 ]
-  [ "$(last_line)" = "CONFIRM_UPDATE demo $old $new main" ]
+  [ "$(last_line)" = "CONFIRM_UPDATE demo $old $new main 0" ]
   [[ "$output" == *"NEW_ALLOW claude Bash(demo-tool run *)"* ]] || false
   [[ "$output" != *"NEW_ALLOW claude Bash(demo-tool *)"* ]] || false
   [ -L "$SANDBOX/agents/demo-helper.md" ]
-  run "$SCRIPT" apply update --commit "$new" --ref main demo
+  run "$SCRIPT" apply update --commit "$new" --adopted 0 --ref main demo
   [ "$status" -eq 0 ]
   [ "$(last_line)" = "UPDATED demo $old $new" ]
   [ ! -e "$SANDBOX/agents/demo-helper.md" ] && [ ! -L "$SANDBOX/agents/demo-helper.md" ] || false
@@ -435,9 +647,13 @@ check_with() {
   state | grep -qx 'version=0.2.0' && state | grep -qx "commit=$new" || false
 }
 
-@test "apply update refuses to run without --commit" {
+@test "apply update refuses to run without --commit or --adopted" {
   add_demo
   run "$SCRIPT" apply update demo
+  [ "$status" -eq 2 ] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo
+  [ "$status" -eq 2 ] && [[ "$output" == *"needs --adopted 0|1"* ]] || false
+  run "$SCRIPT" update --adopted 0 demo
   [ "$status" -eq 2 ]
 }
 
@@ -467,8 +683,8 @@ check_with() {
   target="$(git -C "$ORIGIN" rev-parse v0.10.0)"
   run "$SCRIPT" update demo
   [ "$status" -eq 20 ]
-  [[ "$(last_line)" == "CONFIRM_UPDATE demo "*" $target v0.10.0" ]] || false
-  run "$SCRIPT" apply update --commit "$target" --ref v0.10.0 demo
+  [[ "$(last_line)" == "CONFIRM_UPDATE demo "*" $target v0.10.0 0" ]] || false
+  run "$SCRIPT" apply update --commit "$target" --adopted 0 --ref v0.10.0 demo
   [ "$status" -eq 0 ]
   state | grep -qx 'ref=v0.10.0' && state | grep -qx 'kind=tag' && state | grep -qx 'version=0.10.0' || false
 }
@@ -480,7 +696,7 @@ check_with() {
   edit_conf 's/^version=.*/version=0.2.0/'
   commit_origin "c2"
   "$SCRIPT" update demo >/dev/null 2>&1 || true
-  run "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
   [ "$status" -eq 0 ]
   [ "$(git -C "$SANDBOX/plugins/demo" rev-parse keep)" = "$side" ]
   ! git -C "$SANDBOX/plugins/demo" symbolic-ref -q HEAD || false
