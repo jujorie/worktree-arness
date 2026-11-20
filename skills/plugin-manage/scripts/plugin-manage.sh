@@ -31,8 +31,10 @@
 #                                         it lacks the "ask" rule of providers/opencode/opencode.json
 #   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder by apply
 #   ADOPT <command> <path>                a provided command already installed at the path its adopt= line
-#                                         declares (e.g. by this plugin from another arness): it is used
-#                                         as it is
+#                                         declares (e.g. by this plugin from another arness): that path,
+#                                         ending in /<command> under a folder named after the plugin, is
+#                                         on the command's link chain. It is used as it is; adopting only
+#                                         some of the provided commands is BAD_MANIFEST
 #   INSTALL_SKIPPED <cmd> | UNINSTALL_SKIPPED <cmd>
 #                                         every provided command is adopted: apply does not run install,
 #                                         and remove does not run uninstall (the command is not ours)
@@ -228,7 +230,9 @@ check_names() {
 }
 
 # check_adopt: each adopt line is "<command> <path>", once per command, for a command in provides,
-# with a plain relative path (no "..", ".", empty segments or leading /) that is read under $HOME.
+# with a plain relative path (no "..", ".", empty segments or leading /) that is read under $HOME,
+# ends in /<command> and has a folder named after the plugin (as uv tool's <tool dir>/<plugin>/bin/<cmd>),
+# so it cannot name the install folder of another tool (mise, cargo, go) for a command the user has.
 check_adopt() {
   local line c p seen=" " seg
   while IFS= read -r line; do
@@ -241,6 +245,8 @@ check_adopt() {
     for seg in ${p//\// }; do
       case "$seg" in .|..) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p has a . or .. segment" ;; esac
     done
+    case "$p" in */"$c") ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p does not end in /$c" ;; esac
+    case "/$p" in */"$M_NAME"/*) ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p has no folder named $M_NAME" ;; esac
   done <<< "$M_ADOPT"
 }
 
@@ -283,46 +289,62 @@ check_requirements() {
   done
 }
 
-# real_path <path>: the file a path leads to, every link followed portably (bash 3.2, BSD readlink); fails
-# when it does not exist or the links loop.
-real_path() {
-  local p="$1" t n=0
-  while [ -L "$p" ]; do
+# physical_path <path>: the path with its folder resolved physically (cd -P) and its last component
+# kept as it is, so a link is named, not followed; fails when the folder does not exist.
+physical_path() {
+  local d
+  d="$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "${d%/}" "$(basename "$1")"
+}
+
+# adopted_path <command>: the declared path ($HOME/<path> of its adopt= line) when it is one of the
+# paths on the command's link chain, from `command -v` to the file, each named physically; empty
+# otherwise. Only the chain counts, not the file at its end: commands that share one binary (mise
+# shims) do not match each other's path. An empty $HOME, or one that is /, adopts nothing. Nothing of
+# the plugin runs: the paths are only compared (one readlink per hop: portable to BSD readlink).
+adopted_path() {
+  local c="$1" rel home want p t n=0
+  rel="$(printf '%s' "$M_ADOPT" | awk -v c="$c" '$1 == c { print $2; exit }')"
+  [ -n "$rel" ] && [ -n "${HOME:-}" ] || return 0
+  home="$(cd -P "$HOME" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$home" ] && [ "$home" != / ] || return 0
+  want="$(physical_path "$home/$rel")" || return 0
+  p="$(command -v "$c" 2>/dev/null)" || return 0
+  case "$p" in /*) ;; *) return 0 ;; esac
+  while [ "$n" -le 40 ]; do
+    if [ "$(physical_path "$p")" = "$want" ]; then
+      if [ -e "$p" ]; then printf '%s\n' "$want"; fi
+      return 0
+    fi
+    [ -L "$p" ] || return 0
     t="$(readlink "$p")"
     case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
     n=$((n + 1))
-    [ "$n" -le 40 ] || return 1
   done
-  [ -e "$p" ] || return 1
-  printf '%s/%s\n' "$(cd -P "$(dirname "$p")" && pwd -P)" "$(basename "$p")"
-}
-
-# adopted_path <command>: the real path of the command when it is already installed where its adopt=
-# line says ($HOME/<path>); empty otherwise. Nothing of the plugin runs: the path is only compared.
-adopted_path() {
-  local c="$1" rel found want
-  rel="$(printf '%s' "$M_ADOPT" | awk -v c="$c" '$1 == c { print $2; exit }')"
-  [ -n "$rel" ] && [ -n "${HOME:-}" ] || return 0
-  found="$(command -v "$c" 2>/dev/null)" || return 0
-  case "$found" in /*) ;; *) return 0 ;; esac
-  found="$(real_path "$found")" || return 0
-  want="$(real_path "$HOME/$rel")" || return 0
-  if [ "$found" = "$want" ]; then printf '%s\n' "$found"; fi
 }
 
 # check_provides <old provides> <old adopted>: a command the plugin provides must not exist yet (or
 # its " *" rule would grant a system command, provides=rm) unless the installed version already
 # provided it or it is adopted: installed at its adopt= path. Sets ADOPTED=1 when install is not to
 # run: every provided command is adopted, on a first install or when the installed version was
-# adopted too (one this arness installed keeps being updated by it).
+# adopted too (one this arness installed keeps being updated by it). Adopting only some of them is
+# refused there: install would run over the shared ones and a later remove would uninstall them.
 check_provides() {
-  local old="$1" old_adopted="$2" c n=0 a=0
+  local old="$1" old_adopted="$2" c n=0 a=0 first_a="" first_not=""
   for c in $M_PROVIDES; do
     n=$((n + 1))
-    if [ -n "$(adopted_path "$c")" ]; then a=$((a + 1)); continue; fi
+    if [ -n "$(adopted_path "$c")" ]; then
+      a=$((a + 1))
+      if [ -z "$first_a" ]; then first_a="$c"; fi
+      continue
+    fi
+    if [ -z "$first_not" ]; then first_not="$c"; fi
     case " $old " in *" $c "*) continue ;; esac
     if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi
   done
+  if [ "$old_adopted" = 1 ] && [ -n "$first_a" ] && [ -n "$first_not" ]; then
+    fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $first_a is adopted but $first_not is not installed"
+  fi
   ADOPTED=0
   if [ "$n" -gt 0 ] && [ "$a" -eq "$n" ] && [ "$old_adopted" = 1 ]; then ADOPTED=1; fi
 }

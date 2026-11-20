@@ -148,7 +148,7 @@ install_elsewhere() {
 
 @test "a provided command at another path than its adopt line is still BAD_MANIFEST" {
   install_elsewhere
-  write_conf 'adopt=demo-tool .tools/other/bin/demo-tool'
+  write_conf 'adopt=demo-tool .tools/other/demo/bin/demo-tool'
   commit_origin "adopt elsewhere"
   run "$SCRIPT" add "$URL"
   [ "$status" -eq 4 ]
@@ -222,12 +222,70 @@ install_elsewhere() {
   write_conf 'adopt=rm bin/rm'
   run "$SCRIPT" check "$ORIGIN"
   [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: rm is not in provides" ] || false
-  write_conf 'adopt=demo-tool a/demo-tool' 'adopt=demo-tool b/demo-tool'
+  write_conf 'adopt=demo-tool demo/a/demo-tool' 'adopt=demo-tool demo/b/demo-tool'
   run "$SCRIPT" check "$ORIGIN"
   [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: duplicate command demo-tool" ] || false
   write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
   run "$SCRIPT" check "$ORIGIN"
   [ "$status" -eq 0 ]
+}
+
+@test "check rejects an adopt path that does not end in the command or has no folder named after the plugin" {
+  write_conf 'adopt=demo-tool .tools/demo/bin/mise'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: .tools/demo/bin/mise does not end in /demo-tool" ] || false
+  write_conf 'adopt=demo-tool .tools/demo/bin/xdemo-tool'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: .tools/demo/bin/xdemo-tool does not end in /demo-tool" ] || false
+  for p in .local/share/mise/installs/demo-tool/1.0/bin/demo-tool .tools/demox/bin/demo-tool bin/demo-tool; do
+    write_conf "adopt=demo-tool $p"
+    run "$SCRIPT" check "$ORIGIN"
+    [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: $p has no folder named demo" ] || { echo "accepted: $p"; false; }
+  done
+}
+
+@test "a command that only shares its binary with the adopt path (mise shims) is not adopted" {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.shims" "$HOME/.tools/demo/bin"
+  printf '#!/bin/sh\necho multi\n' > "$HOME/.shims/multi"
+  chmod +x "$HOME/.shims/multi"
+  ln -s "$HOME/.shims/multi" "$TOOL"
+  ln -s "$HOME/.shims/multi" "$BATS_TEST_TMPDIR/bin/other-tool"
+  ln -s "$HOME/.shims/multi" "$HOME/.tools/demo/bin/demo-tool"
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt a shim"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "HOME set to / adopts nothing" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  export HOME=/
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "adopting only some of the provided commands is BAD_MANIFEST on add and on update" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  edit_conf 's/^provides=.*/provides=demo-tool demo-other/'
+  commit_origin "two commands"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ] && [ "$(last_line)" = "BAD_MANIFEST adopt: demo-tool is adopted but demo-other is not installed" ] || false
+  edit_conf 's/^provides=.*/provides=demo-tool/'
+  commit_origin "one command"
+  add_demo
+  state | grep -qx 'adopted=1' || false
+  edit_conf 's/^provides=.*/provides=demo-tool demo-other/'
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "two commands again"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST adopt: demo-tool is adopted but demo-other is not installed" ]
 }
 
 @test "an install that does not provide its commands is INSTALL_FAILED" {

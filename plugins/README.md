@@ -64,7 +64,7 @@ allow.opencode=my-tool *
 | `agents` | no | Space-separated names; each has `agents/<n>.md` with `name: <n>` |
 | `requires` | no | System commands that must be installed; checked, never installed |
 | `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet, unless adopted (`adopt`); after `install` all of them must |
-| `adopt` | no, repeatable | `<command> <path under $HOME>`: where the plugin's `install` puts a command it provides, e.g. `adopt=my-tool .local/share/uv/tools/my-plugin/bin/my-tool`. A command already on the `PATH` whose links lead exactly there is the plugin's own, installed by it from another arness or by hand: it is adopted instead of refused. See *Shared commands* |
+| `adopt` | no, repeatable | `<command> <path under $HOME>`: where the plugin's `install` puts a command it provides, e.g. `adopt=my-tool .local/share/uv/tools/my-plugin/bin/my-tool`. The path ends in `/<command>` and has a folder named like the plugin (`name`), as uv tool's `<tool dir>/<plugin>/bin/<command>`. A command already on the `PATH` whose link chain goes through that path is the plugin's own, installed by it from another arness or by hand: it is adopted instead of refused. See *Shared commands* |
 | `install` / `uninstall` | no | Command run in the plugin folder after add or update / before remove. No time limit |
 | `allow.claude` | no, repeatable | Claude Code rule, rendered into `.claude/settings.json` together with `Skill(<n>)` for each skill. That file is generated: every `apply` renders it again from `providers/claude/settings.json` and the plugin rules, so a line added there by hand is lost (the plan lists it as `DROPPED_SETTING`). Your own rules go in `.claude/settings.local.json` |
 | `allow.opencode` | no, repeatable | OpenCode bash rule; printed for you to add to `opencode.json`, which setup never edits |
@@ -81,7 +81,9 @@ A command that runs arbitrary code from its arguments is also refused in `provid
 
 A command such as `uv tool install` puts is installed once per machine, not per arness. When every command in `provides` is already installed at its `adopt` path, `add` adopts them: the plan shows `ADOPT <command> <path>` and `INSTALL_SKIPPED`, `apply` does not run `install`, and the state records `adopted=1`. Then `remove` does not run `uninstall` (`UNINSTALL_SKIPPED`), so the other arness keeps its command, and `update` does not run `install` while the command is there; once it is gone, `update` installs it and this arness owns it from then on. A plugin this arness installed itself keeps running `install` on every update.
 
-Only the path is compared, nothing of the plugin runs before you confirm. A command at any other path is still refused, so `adopt` cannot claim a system command.
+A command is adopted only when its `adopt` path is one of the paths on its link chain, from the one `command -v` finds to the file, not just a link to the same file: commands that share one binary (mise shims) do not match each other. Adopting only some of the provided commands is refused (`BAD_MANIFEST adopt: <a> is adopted but <b> is not installed`): `install` would run over the shared ones and a later `remove` would uninstall them. An empty `$HOME`, or `$HOME` set to `/`, adopts nothing.
+
+Only paths are compared, nothing of the plugin runs before you confirm. A command at any other path is still refused, so `adopt` cannot claim a system command or one under `$HOME` that another tool installed, unless that tool's install folder is named like the plugin: a plugin called `gh` could adopt a `gh` installed in `.../gh/bin/gh`. That is why the plan's `ADOPT` line shows the adopted path, its folders resolved: check that it is where this plugin installs its command before you confirm.
 
 ## Providers
 
