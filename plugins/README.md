@@ -10,11 +10,13 @@ Always through the `plugin-manage` skill. Each change is two steps: a plan that 
 
 | Need | Plan | Then |
 |---|---|---|
-| Install | `plugin-manage add [--ref <tag>] <url>`: source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> --adopted <0|1> <url>` (both from the plan's `CONFIRM_ADD`): clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
+| Install | `plugin-manage add [--ref <tag>] <url|name>` (a name of `PLUGINS.md`, see below): source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> --adopted <0|1> <url>` (both from the plan's `CONFIRM_ADD`): clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
 | Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --adopted <0|1> --ref <ref> <name>` (from `CONFIRM_UPDATE`) |
 | Remove | `plugin-manage remove <name>` | `apply remove <name>`: runs `uninstall`, removes the links, the clone, the state and its rules |
 | List | `plugin-manage list` | State `OK`, `BROKEN_LINK`, `MODIFIED`, `INSTALL_FAILED` or `UNMANAGED` |
 | Restore links | `./setup.sh --provider <p>` | Relinks the installed plugins and renders their rules |
+
+**Official plugins.** `PLUGINS.md` at the arness root lists them: public repos with CI, a protected `main` and version tags. `plugin-manage catalog` prints them (`OFFICIAL <name> <url> <ref> <description>`), and `add <name>` installs one by name, with the URL and tag of its row (`--ref` overrides the tag). The plugin's manifest must carry that name (`CATALOG_MISMATCH` otherwise). Being official skips no check: the plan and the confirmation are the same as for any URL.
 
 A plugin installed at a tag (`--ref v1.2.0`) updates to the newest stable version tag (`[v]MAJOR.MINOR.PATCH`; a pre-release only with an explicit `--ref`); one installed at a branch follows that branch.
 

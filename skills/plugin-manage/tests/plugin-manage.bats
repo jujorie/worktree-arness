@@ -968,3 +968,110 @@ mk_hook() {
   run "$SCRIPT" run-hook
   [ "$status" -eq 2 ]
 }
+
+# --- catalog (PLUGINS.md) ------------------------------------------------------------
+
+# write_catalog [rows...]: a PLUGINS.md in the sandbox with prose around the table and the given rows.
+write_catalog() {
+  {
+    printf '%s\n' '# Official plugins' '' 'Some prose | with a pipe.' ''
+    printf '%s\n' '| Name | URL | Ref | Description |' '|---|---|---|---|'
+    if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi
+    printf '%s\n' '' '| not | part | of | the table |'
+  } > "$SANDBOX/PLUGINS.md"
+}
+
+@test "catalog lists the rows of the table, and nothing around it" {
+  write_catalog "| demo | $URL | main | Demo plugin for tests |" \
+                '| other-one | https://example.com/o.git | v1.2.0 | Another, with spaces |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [ "${lines[0]}" = "OFFICIAL demo $URL main Demo plugin for tests" ]
+  [ "${lines[1]}" = "OFFICIAL other-one https://example.com/o.git v1.2.0 Another, with spaces" ]
+}
+
+@test "catalog says NONE without PLUGINS.md or without rows" {
+  run "$SCRIPT" catalog
+  [ "$status" -eq 0 ] && [ "$output" = "NONE" ] || false
+  write_catalog
+  run "$SCRIPT" catalog
+  [ "$status" -eq 0 ] && [ "$output" = "NONE" ] || false
+}
+
+@test "catalog rejects a bad row with its line number" {
+  write_catalog '| Bad_Name | https://example.com/x.git | v1 | x |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 7: invalid name 'Bad_Name'" ] || false
+  write_catalog '| x | http://example.com/x.git | v1 | x |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 7: invalid URL 'http://example.com/x.git'" ] || false
+  write_catalog '| x | https://example.com/x.git | -v1 | x |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 7: invalid ref '-v1'" ] || false
+  write_catalog '| x | https://example.com/x.git | v1 |  |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 7: empty description" ] || false
+  write_catalog '| x | https://example.com/x.git | v1 | a | b |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 7: not 4 cells (Name | URL | Ref | Description)" ] || false
+  write_catalog '| x | https://example.com/x.git | v1 | a |' '| x | https://example.com/y.git | v1 | b |'
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 8: duplicate name x" ] || false
+  printf '%s\n' '| Name | URL | Ref | Description |' '| x | https://example.com/x.git | v1 | a |' > "$SANDBOX/PLUGINS.md"
+  run "$SCRIPT" catalog
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 2: the header is not followed by |---|" ] || false
+}
+
+@test "add <name> plans the official plugin from its catalog URL and ref" {
+  git_q -C "$ORIGIN" tag v0.1.0
+  write_catalog "| demo | $URL | v0.1.0 | Demo plugin for tests |"
+  run "$SCRIPT" add demo
+  [ "$status" -eq 20 ]
+  [ "${lines[0]}" = "CATALOG demo" ]
+  printf '%s\n' "$output" | grep -qxF "SOURCE $URL v0.1.0 tag" || false
+  [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head) 0" ]
+}
+
+@test "add <name> --ref overrides the catalog ref" {
+  git_q -C "$ORIGIN" tag v0.1.0
+  write_catalog "| demo | $URL | v0.1.0 | Demo plugin for tests |"
+  run "$SCRIPT" add --ref main demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qxF "SOURCE $URL main branch" || false
+}
+
+@test "apply add <name> installs the official plugin" {
+  write_catalog "| demo | $URL | main | Demo plugin for tests |"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 demo
+  [ "$status" -eq 0 ]
+  [ "$(last_line)" = "ADDED demo $SANDBOX/plugins/demo" ]
+  state | grep -qxF "ref=main" || false
+}
+
+@test "add <name> refuses a name not in the catalog, and a catalog repo with another plugin name" {
+  write_catalog "| demo | $URL | main | Demo plugin for tests |"
+  run "$SCRIPT" add nope
+  [ "$status" -eq 16 ] && [ "$output" = "NOT_IN_CATALOG nope" ] || false
+  write_catalog "| impostor | $URL | main | Claims another name |"
+  run "$SCRIPT" add impostor
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "CATALOG_MISMATCH impostor demo" ]
+  [ -z "$(ls -A "$SANDBOX/plugins")" ]
+}
+
+@test "add <name> reports a bad catalog instead of planning" {
+  write_catalog '| demo | http://example.com/x.git | main | x |'
+  run "$SCRIPT" add demo
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_CATALOG line 7: invalid URL 'http://example.com/x.git'" ] || false
+}
+
+@test "the PLUGINS.md of arness is a valid catalog of public https plugins" {
+  cp "$REPO_ROOT/PLUGINS.md" "$SANDBOX/"
+  run "$SCRIPT" catalog
+  [ "$status" -eq 0 ]
+  [ "$output" != "NONE" ]
+  while IFS= read -r line; do
+    [[ "$line" == "OFFICIAL "*" https://"*" "* ]] || { echo "not https: $line"; false; }
+  done <<< "$output"
+}

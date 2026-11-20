@@ -29,6 +29,8 @@
       "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh remove *)",
       "Bash(skills/plugin-manage/scripts/plugin-manage.sh list)",
       "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh list)",
+      "Bash(skills/plugin-manage/scripts/plugin-manage.sh catalog)",
+      "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh catalog)",
       "Bash(skills/plugin-manage/scripts/plugin-manage.sh check *)",
       "Bash({{$ARNESS_ROOT}}/skills/plugin-manage/scripts/plugin-manage.sh check *)",
       "Bash(skills/plugin-manage/scripts/plugin-manage.sh sync)",

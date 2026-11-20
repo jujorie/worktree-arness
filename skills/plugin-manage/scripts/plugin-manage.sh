@@ -3,17 +3,22 @@
 # into plugins/<name>, whose skills and agents are linked into skills/ and agents/ and whose Claude Code
 # permission rules are rendered into .claude/settings.json. See plugins/README.md.
 #
-# Usage: plugin-manage.sh add [--ref REF] <url>                       plan only, writes nothing
+# Usage: plugin-manage.sh add [--ref REF] <url|name>                  plan only, writes nothing
 #        plugin-manage.sh update [--ref REF] [--no-fetch] <name>      plan only (fetches)
 #        plugin-manage.sh remove <name>                               plan only
-#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url>
+#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url|name>
 #        plugin-manage.sh apply update --commit SHA --adopted 0|1 [--ref REF] <name>
 #        plugin-manage.sh apply remove [--force] <name>
 #        plugin-manage.sh list
 #        plugin-manage.sh check <dir>
 #        plugin-manage.sh sync
 #        plugin-manage.sh run-hook <event> <args>...
+#        plugin-manage.sh catalog
 #
+# PLUGINS.md at the arness root lists the official plugins in a table (Name | URL | Ref | Description).
+# catalog prints them; add and apply add take a name of it instead of a URL: its URL, and its Ref unless
+# --ref is given. The plugin's manifest must carry that name (CATALOG_MISMATCH otherwise). Being in the
+# catalog skips no check and no confirmation.
 # add, update and remove only print the plan. Only `apply` changes anything; it is kept out of the
 # permission allowlists on purpose, so the agent's own tool prompt asks the user before it runs.
 # What arness uses of an installed plugin (rules, links, uninstall) comes from plugins/.<name>.state,
@@ -24,6 +29,8 @@
 #
 # Stdout (machine readable), first word is the status:
 #   PLUGIN <name> <version> <commit>      plan header
+#   CATALOG <name>                        plan: the plugin comes from PLUGINS.md
+#   OFFICIAL <name> <url> <ref> <description>   catalog: one line per official plugin
 #   SOURCE <url|-> <ref> <branch|tag|commit>
 #   DESCRIPTION <text> | REQUIRES <commands> | PROVIDES <commands>
 #   SKILL <name> | AGENT <name>           what the plugin links
@@ -61,7 +68,10 @@
 #   INSTALLED <name> <version> <commit> <ref> <state> <skills> <agents>
 #                                         list line; state OK|BROKEN_LINK|MODIFIED|INSTALL_FAILED|UNMANAGED,
 #                                         skills and agents as linked/declared; "-" for an unknown value
-#   NONE                                  list: no plugins
+#   NONE                                  list: no plugins; catalog: no official plugin
+#   BAD_CATALOG line <n>: <detail>        PLUGINS.md has a row that is not a valid entry (exit 4)
+#   NOT_IN_CATALOG <name>                 add: no official plugin of that name (exit 16)
+#   CATALOG_MISMATCH <catalog> <manifest> the catalog's repo is a plugin with another name (exit 4)
 #   SYNCED <name>                         sync restored the plugin's links
 #   BAD_MANIFEST <detail>                 manifest syntax or field error (exit 4)
 #   INVALID <detail>                      a declared skill or agent is missing or misnamed (exit 4)
@@ -78,12 +88,13 @@
 #                                         appeared or went away since the plan; nothing written (exit 14)
 # Exit codes: 0 ok, 2 invalid usage, 3 clone or fetch failed, 4 invalid plugin, 5 missing requirement,
 #   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch
-#   (MISMATCH, ADOPTION_CHANGED), 15 a hook failed,
+#   (MISMATCH, ADOPTION_CHANGED), 15 a hook failed, 16 not in the catalog,
 #   20 plan printed, confirmation needed.
 set -euo pipefail
 
 EXIT_USAGE=2 EXIT_GIT=3 EXIT_INVALID=4 EXIT_REQUIREMENT=5 EXIT_CONFLICT=6
 EXIT_EXISTS=10 EXIT_DIRTY=11 EXIT_NOT_INSTALLED=12 EXIT_INSTALL=13 EXIT_MISMATCH=14 EXIT_HOOK=15
+EXIT_NOT_IN_CATALOG=16
 EXIT_CONFIRM=20
 
 CONTRACT=1
@@ -645,14 +656,80 @@ prepare_add() {
   ADD_KIND="${resolved##* }"
   git -C "$ADD_DIR" checkout --quiet --detach "$ADD_COMMIT" >&2
   validate_plugin "$ADD_DIR"
+  if [ -n "${ARG_CATALOG:-}" ] && [ "$M_NAME" != "$ARG_CATALOG" ]; then
+    fail "$EXIT_INVALID" "CATALOG_MISMATCH $ARG_CATALOG $M_NAME"
+  fi
   check_requirements
   if [ -e "$PLUGINS/$M_NAME" ] || [ -L "$PLUGINS/$M_NAME" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
   check_provides "" 1
   check_conflicts "$M_NAME"
 }
 
+# --- catalog: PLUGINS.md -------------------------------------------------------------
+
+CATALOG_FILE=PLUGINS.md
+CATALOG_HEADER='| Name | URL | Ref | Description |'
+US=$'\037'   # field separator of catalog rows: never in a valid cell, and not IFS whitespace
+
+# catalog_rows: one line per row of the table under the header, fields separated by $US: line number,
+# name, url, ref, description. A bad row prints BAD_CATALOG and exits 4. Nothing without the file or the
+# table; the table ends at the first line that does not start with |.
+catalog_rows() {
+  local file="$ROOT/$CATALOG_FILE" n row name url ref desc seen=" " cells
+  [ -f "$file" ] || return 0
+  while IFS= read -r n && IFS= read -r row; do
+    [ "$row" != SEPARATOR_MISSING ] || fail "$EXIT_INVALID" "BAD_CATALOG line $n: the header is not followed by |---|"
+    case "$row" in *$'\r'*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: CRLF line ending" ;; esac
+    case "$row" in *"$US"*|*$'\t'*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: control character" ;; esac
+    cells="$(printf '%s' "$row" | tr -cd '|' | wc -c | tr -d ' ')"
+    [ "$cells" -eq 5 ] || fail "$EXIT_INVALID" "BAD_CATALOG line $n: not 4 cells (Name | URL | Ref | Description)"
+    IFS="$US" read -r name url ref desc <<< "$(printf '%s' "$row" | awk -F'|' -v us="$US" '{
+      for (i = 2; i <= 5; i++) gsub(/^[ ]+|[ ]+$/, "", $i)
+      printf "%s%s%s%s%s%s%s", $2, us, $3, us, $4, us, $5 }')"
+    is_slug "$name" || fail "$EXIT_INVALID" "BAD_CATALOG line $n: invalid name '$name'"
+    case "$seen" in *" $name "*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: duplicate name $name" ;; esac
+    seen="$seen$name "
+    validate_url "$url" || fail "$EXIT_INVALID" "BAD_CATALOG line $n: invalid URL '$url'"
+    validate_ref "$ref" || fail "$EXIT_INVALID" "BAD_CATALOG line $n: invalid ref '$ref'"
+    [ -n "$desc" ] || fail "$EXIT_INVALID" "BAD_CATALOG line $n: empty description"
+    case "$desc" in *[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: control character" ;; esac
+    printf '%s\n' "$n$US$name$US$url$US$ref$US$desc"
+  done < <(awk -v h="$CATALOG_HEADER" '
+    !table { if ($0 == h) { table = 1; sep = 1 }; next }
+    sep { sep = 0; if ($0 !~ /^\|[-: |]+\|$/) { print NR; print "SEPARATOR_MISSING"; exit }; next }
+    /^\|/ { print NR; print; next }
+    { exit }' "$file")
+}
+
+# load_catalog: CATALOG_ROWS from catalog_rows, or its BAD_CATALOG line and exit code.
+load_catalog() {
+  local rc=0
+  CATALOG_ROWS="$(catalog_rows)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$CATALOG_ROWS" | tail -n 1
+    exit "$rc"
+  fi
+}
+
+cmd_catalog() {
+  [ $# -eq 0 ] || die "catalog takes no arguments"
+  load_catalog
+  if [ -z "$CATALOG_ROWS" ]; then echo "NONE"; return 0; fi
+  printf '%s\n' "$CATALOG_ROWS" | awk -F"$US" '{ print "OFFICIAL " $2 " " $3 " " $4 " " $5 }'
+}
+
+# catalog_entry <name>: CAT_URL and CAT_REF of that official plugin, or NOT_IN_CATALOG.
+catalog_entry() {
+  local line
+  load_catalog
+  line="$(printf '%s\n' "$CATALOG_ROWS" | awk -F"$US" -v n="$1" '$2 == n { print; exit }')"
+  [ -n "$line" ] || fail "$EXIT_NOT_IN_CATALOG" "NOT_IN_CATALOG $1"
+  CAT_URL="$(printf '%s' "$line" | awk -F"$US" '{ print $3 }')"
+  CAT_REF="$(printf '%s' "$line" | awk -F"$US" '{ print $4 }')"
+}
+
 parse_add_args() {
-  ARG_URL="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED=""
+  ARG_URL="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED="" ARG_CATALOG=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
@@ -662,7 +739,14 @@ parse_add_args() {
       *)        [ -z "$ARG_URL" ] || die "only one URL allowed"; ARG_URL="$1"; shift ;;
     esac
   done
-  [ -n "$ARG_URL" ] || die "missing plugin URL"
+  [ -n "$ARG_URL" ] || die "missing plugin URL or name"
+  # A bare name is an official plugin: its URL, and its ref unless --ref is given, come from PLUGINS.md.
+  if is_slug "$ARG_URL"; then
+    ARG_CATALOG="$ARG_URL"
+    catalog_entry "$ARG_CATALOG"
+    ARG_URL="$CAT_URL"
+    if [ -z "$ARG_REF" ]; then ARG_REF="$CAT_REF"; fi
+  fi
   validate_url "$ARG_URL" || die "invalid URL (allowed: https://, ssh://, git@host:path, file://): $ARG_URL"
   if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
   if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
@@ -673,6 +757,7 @@ cmd_add() {
   parse_add_args "$@"
   [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply add'"
   prepare_add "$ARG_URL" "$ARG_REF"
+  if [ -n "$ARG_CATALOG" ]; then echo "CATALOG $ARG_CATALOG"; fi
   print_plan "$ADD_COMMIT" "$ARG_URL" "$ADD_REF" "$ADD_KIND" "$ADD_DIR"
   fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT $ADOPTED"
 }
@@ -974,7 +1059,8 @@ main() {
     check)  cmd_check "$@" ;;
     sync)   cmd_sync "$@" ;;
     run-hook) cmd_run_hook "$@" ;;
-    *)      die "unknown command: $cmd (add, update, remove, apply, list, check, sync, run-hook)" ;;
+    catalog) cmd_catalog "$@" ;;
+    *)      die "unknown command: $cmd (add, update, remove, apply, list, check, sync, run-hook, catalog)" ;;
   esac
 }
 

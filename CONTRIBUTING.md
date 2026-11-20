@@ -59,6 +59,16 @@ Before asking for review, check that:
 
 Keep a PR to one concern; small PRs get merged faster.
 
+## Official plugins
+
+`PLUGINS.md` lists the plugins `plugin-manage add <name>` installs by name. To add one, open a pull request that adds its row (`| <name> | https://... .git | <tag> | <one line> |`). The plugin must:
+
+- be a public repo, cloned over `https://`, whose `arness-plugin.conf` has `name=<name>`;
+- pass `plugin-manage check` and its own CI on macOS and Linux;
+- protect `main` (pull request, code-owner review, required checks) and release with version tags (`v1.2.3`); the row names the tag to install.
+
+The suite checks the table (`plugin-manage.bats`).
+
 ## Local skills
 
 `skills/` is private by default: a skill that is not in the allowlist in `skills/.gitignore` is a local skill, never committed and skipped by the checks. See `skills/README.md`. Do not reference one from committed files. A **new shared skill** needs its `!/<name>/` line in `skills/.gitignore`.
