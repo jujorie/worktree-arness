@@ -10,8 +10,8 @@ Always through the `plugin-manage` skill. Each change is two steps: a plan that 
 
 | Need | Plan | Then |
 |---|---|---|
-| Install | `plugin-manage add [--ref <tag>] <url>`: source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> <url>`: clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
-| Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --ref <ref> <name>` |
+| Install | `plugin-manage add [--ref <tag>] <url>`: source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> --adopted <0|1> <url>` (both from the plan's `CONFIRM_ADD`): clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
+| Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --adopted <0|1> --ref <ref> <name>` (from `CONFIRM_UPDATE`) |
 | Remove | `plugin-manage remove <name>` | `apply remove <name>`: runs `uninstall`, removes the links, the clone, the state and its rules |
 | List | `plugin-manage list` | State `OK`, `BROKEN_LINK`, `MODIFIED`, `INSTALL_FAILED` or `UNMANAGED` |
 | Restore links | `./setup.sh --provider <p>` | Relinks the installed plugins and renders their rules |
@@ -79,7 +79,7 @@ A command that runs arbitrary code from its arguments is also refused in `provid
 
 ### Shared commands
 
-A command such as `uv tool install` puts is installed once per machine, not per arness. When every command in `provides` is already installed at its `adopt` path, `add` adopts them: the plan shows `ADOPT <command> <path>` and `INSTALL_SKIPPED`, `apply` does not run `install`, and the state records `adopted=1`. Then `remove` does not run `uninstall` (`UNINSTALL_SKIPPED`), so the other arness keeps its command, and `update` does not run `install` while the command is there; once it is gone, `update` installs it and this arness owns it from then on. A plugin this arness installed itself keeps running `install` on every update.
+A command such as `uv tool install` puts is installed once per machine, not per arness. When every command in `provides` is already installed at its `adopt` path, `add` adopts them: the plan shows `ADOPT <command> <path>` and `INSTALL_SKIPPED`, `apply` does not run `install`, and the state records `adopted=1`. The plan's confirmation line ends with that decision (`1` adopted, `0` not) and `apply` takes it back as `--adopted`: if the command appeared or went away since the plan, `apply` stops with `ADOPTION_CHANGED` and writes nothing, so what runs is what was shown. Then `remove` does not run `uninstall` (`UNINSTALL_SKIPPED`), so the other arness keeps its command, and `update` does not run `install` while the command is there; once it is gone, `update` installs it and this arness owns it from then on. A plugin this arness installed itself keeps running `install` on every update.
 
 A command is adopted only when its `adopt` path is one of the paths on its link chain, from the one `command -v` finds to the file, not just a link to the same file: commands that share one binary (mise shims) do not match each other. Adopting only some of the provided commands is refused (`BAD_MANIFEST adopt: <a> is adopted but <b> is not installed`): `install` would run over the shared ones and a later `remove` would uninstall them. An empty `$HOME`, or `$HOME` set to `/`, adopts nothing.
 

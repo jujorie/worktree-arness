@@ -6,8 +6,8 @@
 # Usage: plugin-manage.sh add [--ref REF] <url>                       plan only, writes nothing
 #        plugin-manage.sh update [--ref REF] [--no-fetch] <name>      plan only (fetches)
 #        plugin-manage.sh remove <name>                               plan only
-#        plugin-manage.sh apply add --commit SHA [--ref REF] <url>
-#        plugin-manage.sh apply update --commit SHA [--ref REF] <name>
+#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url>
+#        plugin-manage.sh apply update --commit SHA --adopted 0|1 [--ref REF] <name>
 #        plugin-manage.sh apply remove [--force] <name>
 #        plugin-manage.sh list
 #        plugin-manage.sh check <dir>
@@ -41,8 +41,9 @@
 #   DROPPED_SETTING <line>                a line of .claude/settings.json edited by hand (no template or
 #                                         plugin rule gives it): apply renders the file again and loses
 #                                         it. Move it to .claude/settings.local.json before apply
-#   CONFIRM_ADD <name> <commit>           plan printed; nothing written (exit 20)
-#   CONFIRM_UPDATE <name> <from> <to> <ref>   plan printed; nothing written (exit 20)
+#   CONFIRM_ADD <name> <commit> <adopted> plan printed; nothing written (exit 20). <adopted> is 1 when
+#                                         install is skipped (ADOPT), else 0: apply takes it as --adopted
+#   CONFIRM_UPDATE <name> <from> <to> <ref> <adopted>   plan printed; nothing written (exit 20)
 #   CONFIRM_REMOVE <name>                 plan printed; nothing written (exit 20)
 #   ADDED <name> <path>                   cloned, linked, rules rendered, install run
 #   UPDATED <name> <from> <to>            moved to <to>, links and rules refreshed, install run
@@ -66,8 +67,11 @@
 #   NOT_INSTALLED <name>                  (exit 12)
 #   INSTALL_FAILED <name>                 install command failed; clone and links kept (exit 13)
 #   MISMATCH <expected> <actual>          --commit is not what the plan resolved to (exit 14)
+#   ADOPTION_CHANGED <expected> <actual>  --adopted is not what apply finds now: the adopted command
+#                                         appeared or went away since the plan; nothing written (exit 14)
 # Exit codes: 0 ok, 2 invalid usage, 3 clone or fetch failed, 4 invalid plugin, 5 missing requirement,
-#   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch,
+#   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch
+#   (MISMATCH, ADOPTION_CHANGED),
 #   20 plan printed, confirmation needed.
 set -euo pipefail
 
@@ -603,11 +607,12 @@ prepare_add() {
 }
 
 parse_add_args() {
-  ARG_URL="" ARG_REF="" ARG_COMMIT=""
+  ARG_URL="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
       --commit) [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
+      --adopted) [ $# -ge 2 ] || die "--adopted needs a value"; ARG_ADOPTED="$2"; shift 2 ;;
       -*)       die "unknown option: $1" ;;
       *)        [ -z "$ARG_URL" ] || die "only one URL allowed"; ARG_URL="$1"; shift ;;
     esac
@@ -616,21 +621,25 @@ parse_add_args() {
   validate_url "$ARG_URL" || die "invalid URL (allowed: https://, ssh://, git@host:path, file://): $ARG_URL"
   if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
   if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
+  case "$ARG_ADOPTED" in ""|0|1) ;; *) die "invalid --adopted (0 or 1): $ARG_ADOPTED" ;; esac
 }
 
 cmd_add() {
   parse_add_args "$@"
-  [ -z "$ARG_COMMIT" ] || die "--commit belongs to 'apply add'"
+  [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply add'"
   prepare_add "$ARG_URL" "$ARG_REF"
   print_plan "$ADD_COMMIT" "$ARG_URL" "$ADD_REF" "$ADD_KIND" "$ADD_DIR"
-  fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT"
+  fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT $ADOPTED"
 }
 
 apply_add() {
   parse_add_args "$@"
   validate_full_commit "$ARG_COMMIT" || die "apply add needs --commit <full 40-character sha> from the plan (CONFIRM_ADD)"
+  [ -n "$ARG_ADOPTED" ] || die "apply add needs --adopted 0|1 from the plan (CONFIRM_ADD)"
   prepare_add "$ARG_URL" "$ARG_REF"
   [ "$ARG_COMMIT" = "$ADD_COMMIT" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $ADD_COMMIT"
+  # What runs is what the plan showed: install skipped (ADOPT) or not.
+  [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
   local dest="$PLUGINS/$M_NAME"
   mv "$ADD_DIR" "$dest"
   link_plugin "$M_NAME" "$M_SKILLS" "$M_AGENTS"
@@ -689,11 +698,12 @@ prepare_update() {
 }
 
 parse_name_args() {
-  ARG_NAME="" ARG_REF="" ARG_COMMIT="" ARG_FETCH=1 ARG_FORCE=0
+  ARG_NAME="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED="" ARG_FETCH=1 ARG_FORCE=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)      [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
       --commit)   [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
+      --adopted)  [ $# -ge 2 ] || die "--adopted needs a value"; ARG_ADOPTED="$2"; shift 2 ;;
       --no-fetch) ARG_FETCH=0; shift ;;
       --force)    ARG_FORCE=1; shift ;;
       -*)         die "unknown option: $1" ;;
@@ -704,11 +714,12 @@ parse_name_args() {
   is_slug "$ARG_NAME" || die "invalid plugin name: $ARG_NAME"
   if [ -n "$ARG_REF" ]; then validate_ref "$ARG_REF" || die "invalid --ref: $ARG_REF"; fi
   if [ -n "$ARG_COMMIT" ]; then validate_commit "$ARG_COMMIT" || die "invalid --commit: $ARG_COMMIT"; fi
+  case "$ARG_ADOPTED" in ""|0|1) ;; *) die "invalid --adopted (0 or 1): $ARG_ADOPTED" ;; esac
 }
 
 cmd_update() {
   parse_name_args "$@"
-  [ -z "$ARG_COMMIT" ] || die "--commit belongs to 'apply update'"
+  [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply update'"
   [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
   local name="$ARG_NAME" state rule
   prepare_update "$name" "$ARG_REF" "$ARG_FETCH"
@@ -721,18 +732,20 @@ cmd_update() {
   while IFS= read -r rule; do
     if [ -n "$rule" ] && ! conf_value "$state" allow.opencode | grep -qxF -- "$rule"; then echo "NEW_ALLOW opencode $rule"; fi
   done <<< "$M_ALLOW_OPENCODE"
-  fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $UP_OLD $UP_TARGET $UP_REF"
+  fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $UP_OLD $UP_TARGET $UP_REF $ADOPTED"
 }
 
 # No fetch: apply moves to what the plan fetched and showed, or reports MISMATCH.
 apply_update() {
   parse_name_args "$@"
   validate_full_commit "$ARG_COMMIT" || die "apply update needs --commit <full 40-character sha> from the plan (CONFIRM_UPDATE)"
+  [ -n "$ARG_ADOPTED" ] || die "apply update needs --adopted 0|1 from the plan (CONFIRM_UPDATE)"
   [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
   local name="$ARG_NAME"
   prepare_update "$name" "$ARG_REF" 0
   if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
   [ "$ARG_COMMIT" = "$UP_TARGET" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $UP_TARGET"
+  [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
   # Detached: no local branch is created or reset, so nothing local can be lost.
   git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
   unlink_plugin "$name"
@@ -748,7 +761,7 @@ apply_update() {
 
 cmd_remove() {
   parse_name_args "$@"
-  [ -z "$ARG_REF$ARG_COMMIT" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
+  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
   local name="$ARG_NAME" n uninstall
   [ -d "$PLUGINS/$name" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
   echo "PLUGIN $name $(state_value "$name" version | sed 's/^$/-/') $(state_value "$name" commit | sed 's/^$/-/')"
@@ -764,7 +777,7 @@ cmd_remove() {
 
 apply_remove() {
   parse_name_args "$@"
-  [ -z "$ARG_REF$ARG_COMMIT" ] || die "apply remove takes only --force and a plugin name"
+  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED" ] || die "apply remove takes only --force and a plugin name"
   local name="$ARG_NAME" dest="$PLUGINS/$ARG_NAME" why uninstall
   [ -d "$dest" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
   why="$(dirty_reason "$dest" "$(state_value "$name" commit)")"

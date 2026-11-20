@@ -27,7 +27,7 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 
 | Output | Exit | What to do |
 |---|---|---|
-| Plan lines (`PLUGIN`, `SOURCE`, `DESCRIPTION`, `REQUIRES`, `PROVIDES`, `SKILL`, `AGENT`, `ALLOW`, `NEW_ALLOW`, `OPENCODE_AUTO_ALLOW`, `INSTALL`, `UNINSTALL`, `ADOPT`, `INSTALL_SKIPPED`, `UNINSTALL_SKIPPED`, `DROPPED_SETTING`), then `CONFIRM_ADD <name> <commit>` / `CONFIRM_UPDATE <name> <from> <to> <ref>` / `CONFIRM_REMOVE <name>` | 20 | Nothing was written. Show the whole plan: source and commit, description, requirements, the commands the plugin installs (`PROVIDES`), skills, agents, every `ALLOW` rule word for word (`NEW_ALLOW` = rules the installed version did not have), the scripts OpenCode would run without asking (`OPENCODE_AUTO_ALLOW`), and the `INSTALL`/`UNINSTALL` commands, which run code from the plugin. With `ADOPT <command> <path>`, tell the user that the command is already installed where the plugin puts it (by this plugin from another arness, or by hand) and is used as it is: `INSTALL_SKIPPED` and `UNINSTALL_SKIPPED` mean apply and remove leave it alone (`plugins/README.md`, *Shared commands*); ask the user to check that the path is where this plugin installs its command. With `OPENCODE_UNGATED`, also tell the user that their `opencode.json` lets OpenCode run `apply` without asking, and that the `"ask"` rule from `providers/opencode/opencode.json` should be added to it (`plugins/README.md`). With `DROPPED_SETTING <line>` lines, tell the user that `apply` renders `.claude/settings.json` again and loses those lines, edited by hand into that generated file (a rule such as `"Bash(gh pr review:*)"`, a key such as `"model": "opus"`), and offer to move them to `.claude/settings.local.json` first, which is never rendered; never move them without a yes. Ask for confirmation. On an explicit yes, go to step 3. |
+| Plan lines (`PLUGIN`, `SOURCE`, `DESCRIPTION`, `REQUIRES`, `PROVIDES`, `SKILL`, `AGENT`, `ALLOW`, `NEW_ALLOW`, `OPENCODE_AUTO_ALLOW`, `INSTALL`, `UNINSTALL`, `ADOPT`, `INSTALL_SKIPPED`, `UNINSTALL_SKIPPED`, `DROPPED_SETTING`), then `CONFIRM_ADD <name> <commit> <adopted>` / `CONFIRM_UPDATE <name> <from> <to> <ref> <adopted>` / `CONFIRM_REMOVE <name>` | 20 | Nothing was written. Show the whole plan: source and commit, description, requirements, the commands the plugin installs (`PROVIDES`), skills, agents, every `ALLOW` rule word for word (`NEW_ALLOW` = rules the installed version did not have), the scripts OpenCode would run without asking (`OPENCODE_AUTO_ALLOW`), and the `INSTALL`/`UNINSTALL` commands, which run code from the plugin. With `ADOPT <command> <path>`, tell the user that the command is already installed where the plugin puts it (by this plugin from another arness, or by hand) and is used as it is: `INSTALL_SKIPPED` and `UNINSTALL_SKIPPED` mean apply and remove leave it alone (`plugins/README.md`, *Shared commands*); ask the user to check that the path is where this plugin installs its command. With `OPENCODE_UNGATED`, also tell the user that their `opencode.json` lets OpenCode run `apply` without asking, and that the `"ask"` rule from `providers/opencode/opencode.json` should be added to it (`plugins/README.md`). With `DROPPED_SETTING <line>` lines, tell the user that `apply` renders `.claude/settings.json` again and loses those lines, edited by hand into that generated file (a rule such as `"Bash(gh pr review:*)"`, a key such as `"model": "opus"`), and offer to move them to `.claude/settings.local.json` first, which is never rendered; never move them without a yes. Ask for confirmation. On an explicit yes, go to step 3. |
 | `UP_TO_DATE <name> <commit> <ref>` | 0 | Report it. |
 | `INSTALLED ...` lines / `NONE` | 0 | Show them as a table: name, version, commit, ref, state, skills and agents linked/declared. `BROKEN_LINK`: offer `./setup.sh --provider <p>` (it restores plugin links). `MODIFIED`: the clone was changed outside this skill (edits, a `git pull`); nothing from it is trusted until it is updated or removed. `INSTALL_FAILED`: offer update or remove. `UNMANAGED`: a folder this skill did not install; offer to remove it. |
 | `VALID <name> <version>` | 0 | Report it. |
@@ -40,9 +40,9 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 | error on stderr | 2 | Invalid usage, URL, ref or name. Fix the input or ask the user. |
 | error on stderr | 3 | Clone or fetch failed (network, auth, wrong URL). Show the git error. |
 
-3. Run the confirmed change, with the full 40-character commit from the plan, so what runs is what was shown:
-   - `... apply add --commit <commit> [--ref <same ref>] <url>`
-   - `... apply update --commit <to> --ref <ref> <name>` (the `<ref>` of `CONFIRM_UPDATE`)
+3. Run the confirmed change, with the full 40-character commit and the `<adopted>` (`0` or `1`, the last field of `CONFIRM_ADD` / `CONFIRM_UPDATE`) from the plan, so what runs is what was shown:
+   - `... apply add --commit <commit> --adopted <adopted> [--ref <same ref>] <url>`
+   - `... apply update --commit <to> --adopted <adopted> --ref <ref> <name>` (the `<ref>` of `CONFIRM_UPDATE`)
    - `... apply remove <name>`
 
 | Output | Exit | What to do |
@@ -50,12 +50,13 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 | `ADDED <name> <path>` / `UPDATED <name> <from> <to>` | 0 | Report it. Relay the `MANUAL opencode bash <rule>` and `MANUAL opencode skill <name>` lines: the user adds them to `opencode.json` if they use OpenCode. Tell the user to restart the agent session to load new skills and agents. |
 | `REMOVED <name>` | 0 | Report it; restart the session to unload its skills. |
 | `MISMATCH <expected> <actual>` | 14 | The source changed after the plan. Run the plan again and show it. |
+| `ADOPTION_CHANGED <expected> <actual>` | 14 | The adopted command appeared or went away after the plan, so `install` would (not) run against what was shown; nothing was written. Run the plan again and show it. |
 | `INSTALL_FAILED <name>` | 13 | The install command failed (its output is on stderr); clone and links are kept. Show the error, then offer update after a fix, or remove. |
 | any status of the table above | | As above. |
 
 ## Rules
 
-- Never run `apply` without showing the plan and getting the user's explicit confirmation in this conversation, and always pass the `--commit` from that plan. `--force` only on an explicit answer too.
+- Never run `apply` without showing the plan and getting the user's explicit confirmation in this conversation, and always pass the `--commit` and `--adopted` from that plan. `--force` only on an explicit answer too.
 - `install` has no time limit. If it hangs, tell the user; do not retry it in a loop.
 - Never edit `opencode.json`, `.claude/settings.json`, `plugins/.<name>.state` or files inside `plugins/` yourself, and never link plugin skills or agents by hand.
 - Plugin skills and agents are local to this machine: never commit them, copy their content into committed files or mention them in commits and pull requests.
