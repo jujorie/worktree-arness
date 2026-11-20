@@ -60,6 +60,7 @@ Each of these has broken a script here that looked fine.
 - Folder `skills/<name>/`, `<name>` in `kebab-case`, `<noun>-<verb>` (`repo-clone`, `worktree-create`). It must equal `name` in `SKILL.md`.
 - Layout: `SKILL.md`, `scripts/` (everything the skill runs) and `tests/` (bats).
 - `SKILL.md` frontmatter: `name`, `description` (what it does and **when to use it**, one sentence or two) and, if it has a script, `allowed-tools` with that script's exact command.
+- Write `description` as a folded block, `description: >-` and then lines indented by two spaces: any text, `: ` included, stays valid YAML. A one-line value with `: ` inside is invalid YAML: a strict parser rejects it, and a provider that cannot parse the frontmatter may load the skill with no fields (Claude Code's docs say so). `./scripts/test.sh` checks every shared skill with the [Agent Skills](https://agentskills.io/specification) validator.
 - Body: what it does, `## Procedure` (a table of status → action) and `## Rules` (what the agent must never do).
 - Use the same words for the same thing: **worktree**, **source**, **base branch**, **slug** (`<repo>/<name>`).
 

@@ -329,6 +329,19 @@ EOF
   done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
+# The Agent Skills reference validator (https://agentskills.io/specification), pinned. Provider-neutral
+# checks of each SKILL.md frontmatter: valid YAML, name format equal to the folder, description length.
+# Its PyPI package is skills-ref, its executable agentskills.
+AGENTSKILLS_VALIDATOR="skills-ref==0.1.1"
+
+@test "every shared skill passes the Agent Skills validator" {
+  local d failed=""
+  while IFS= read -r d; do
+    uvx -q --from "$AGENTSKILLS_VALIDATOR" agentskills validate "${d%/}" || failed="$failed $(basename "$d")"
+  done < <(shared_skill_dirs "$REPO_ROOT")
+  [ -z "$failed" ] || { echo "invalid SKILL.md frontmatter:$failed"; false; }
+}
+
 @test "skill scripts live under <skill>/scripts" {
   # no loose shell scripts directly in a skill folder or elsewhere in skills/
   while IFS= read -r d; do

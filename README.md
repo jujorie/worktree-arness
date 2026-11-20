@@ -65,10 +65,15 @@ Rules for new skills: scripts go in `skills/<name>/scripts/`, tests in `skills/<
 Not required to use the repo. If you modify `setup.sh`, `scripts/`, any `providers/*/setup.sh` or a skill's scripts, install the tools and run the suite:
 
 ```bash
-brew install bats-core shellcheck            # macOS
-sudo apt install bats shellcheck             # Ubuntu / WSL
+brew install bats-core shellcheck uv         # macOS
+sudo apt install bats shellcheck             # Ubuntu / WSL, then uv: https://docs.astral.sh/uv/getting-started/installation/
 ./scripts/test.sh
 ```
+
+`uvx` (part of uv) is required: `scripts/test.sh` fails with `missing: uvx` without it. The suite runs the
+[Agent Skills](https://agentskills.io/specification) reference validator (`uvx --from skills-ref agentskills
+validate <skill>`) on every shared skill, so each `SKILL.md` frontmatter is valid YAML with a valid `name`
+and `description` for any provider.
 
 CI runs the same suite on Ubuntu and macOS (`.github/workflows/test.yml`). Git Bash on Windows is best effort: CI does not run there, and in Git Bash `./scripts/test.sh` still fails the symlink tests (Windows symlinks) and some tests in `tests/` and `plugin-manage`, as on `main`.
 Scripts must stay portable: bash 3.2 (macOS default) compatible, no GNU-only flags (`sed -i`, `readlink -f`, `mapfile`...). The tests check this.

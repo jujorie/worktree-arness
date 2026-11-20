@@ -1,6 +1,10 @@
 ---
 name: worktree-config
-description: Apply config/<repo>/ to an existing worktree: copy its files and run install.sh there. Use whenever the user asks to configure, set up, prepare or re-apply the config of a worktree <repo>/<name>, e.g. "configura el worktree", "prepara el worktree", "instala dependencias". Always use this skill, never its script directly. worktree-create already runs it.
+description: >-
+  Apply config/<repo>/ to an existing worktree: copy its files and run install.sh there. Use
+  whenever the user asks to configure, set up, prepare or re-apply the config of a worktree
+  <repo>/<name>, e.g. "configura el worktree", "prepara el worktree", "instala dependencias". Always
+  use this skill, never its script directly. worktree-create already runs it.
 allowed-tools: Bash(skills/worktree-config/scripts/worktree-config.sh *)
 ---
 
