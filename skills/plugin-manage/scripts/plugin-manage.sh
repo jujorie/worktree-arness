@@ -12,11 +12,15 @@
 #        plugin-manage.sh list
 #        plugin-manage.sh check <dir>
 #        plugin-manage.sh sync
+#        plugin-manage.sh run-hook <event> <args>...
 #
 # add, update and remove only print the plan. Only `apply` changes anything; it is kept out of the
 # permission allowlists on purpose, so the agent's own tool prompt asks the user before it runs.
 # What arness uses of an installed plugin (rules, links, uninstall) comes from plugins/.<name>.state,
 # written by apply from the validated manifest, never from the clone's files as they are now.
+# run-hook runs the hook.<event> command of every installed plugin that declares one, in its folder, with
+# <args> appended (events: worktree-remove, run by worktree-clean before it removes a worktree, with
+# <repo>/<name>). A plugin whose clone was changed (MODIFIED in list) is not run: it counts as failed.
 #
 # Stdout (machine readable), first word is the status:
 #   PLUGIN <name> <version> <commit>      plan header
@@ -30,6 +34,9 @@
 #   OPENCODE_UNGATED <file>               that opencode.json lets OpenCode run `apply` without asking:
 #                                         it lacks the "ask" rule of providers/opencode/opencode.json
 #   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder by apply
+#   HOOK <event> <cmd>                    plan: command arness runs in the plugin folder on <event>
+#   HOOK <name> <line>                    run-hook: a line the plugin's hook printed
+#   HOOK_FAILED <name> <exit|modified|missing>  run-hook: that hook failed or was not run (exit 15)
 #   DROPPED_SETTING <line>                a line of .claude/settings.json edited by hand (no template or
 #                                         plugin rule gives it): apply renders the file again and loses
 #                                         it. Move it to .claude/settings.local.json before apply
@@ -60,11 +67,12 @@
 #   MISMATCH <expected> <actual>          --commit is not what the plan resolved to (exit 14)
 # Exit codes: 0 ok, 2 invalid usage, 3 clone or fetch failed, 4 invalid plugin, 5 missing requirement,
 #   6 name conflict, 10 already installed, 11 dirty, 12 not installed, 13 install failed, 14 mismatch,
-#   20 plan printed, confirmation needed.
+#   15 a hook failed, 20 plan printed, confirmation needed.
 set -euo pipefail
 
 EXIT_USAGE=2 EXIT_GIT=3 EXIT_INVALID=4 EXIT_REQUIREMENT=5 EXIT_CONFLICT=6
-EXIT_EXISTS=10 EXIT_DIRTY=11 EXIT_NOT_INSTALLED=12 EXIT_INSTALL=13 EXIT_MISMATCH=14 EXIT_CONFIRM=20
+EXIT_EXISTS=10 EXIT_DIRTY=11 EXIT_NOT_INSTALLED=12 EXIT_INSTALL=13 EXIT_MISMATCH=14 EXIT_HOOK=15
+EXIT_CONFIRM=20
 
 CONTRACT=1
 MANIFEST=arness-plugin.conf
@@ -74,6 +82,10 @@ SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 # trailing " *".
 CLAUDE_RULE_RE='^Bash\(([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?\)$'
 OPENCODE_RULE_RE='^([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?$'
+# Events a plugin may hook (hook.<event>=<command>), each run by one arness script with fixed arguments.
+HOOK_EVENTS=" worktree-remove "
+# A hook command: a relative path to an executable of the plugin, then literal arguments.
+HOOK_RE='^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)(( [A-Za-z0-9._/=:@+,-]+)*)$'
 # Commands that run arbitrary code from their arguments: no rule may name them, even with literal
 # arguments. Versioned names (python3.12, node20, gawk) are caught by RUNNER_RE.
 RUNNERS=" bash sh zsh dash ksh fish csh tcsh pwsh powershell env sudo su doas xargs eval exec command nohup"
@@ -142,7 +154,7 @@ is_slug() { [[ $1 =~ $SLUG_RE ]]; }
 parse_manifest() {
   local file="$1" line key value n=0 seen=" "
   M_NAME="" M_VERSION="" M_PREFIX="" M_ARNESS="" M_DESC="" M_SKILLS="" M_AGENTS="" M_REQUIRES="" M_PROVIDES=""
-  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE=""
+  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE="" M_HOOKS=""
   [ -f "$file" ] || fail "$EXIT_INVALID" "BAD_MANIFEST missing $MANIFEST"
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -158,6 +170,11 @@ parse_manifest() {
       allow.claude)   M_ALLOW_CLAUDE="${M_ALLOW_CLAUDE}${value}"$'\n'; continue ;;
       allow.opencode) M_ALLOW_OPENCODE="${M_ALLOW_OPENCODE}${value}"$'\n'; continue ;;
       name|version|prefix|arness|description|skills|agents|requires|provides|install|uninstall) ;;
+      hook.*)
+        case "$HOOK_EVENTS" in
+          *" ${key#hook.} "*) ;;
+          *) fail "$EXIT_INVALID" "BAD_MANIFEST line $n: unknown hook event ${key#hook.}" ;;
+        esac ;;
       *) fail "$EXIT_INVALID" "BAD_MANIFEST line $n: unknown key $key" ;;
     esac
     case "$seen" in *" $key "*) fail "$EXIT_INVALID" "BAD_MANIFEST line $n: duplicate key $key" ;; esac
@@ -174,6 +191,7 @@ parse_manifest() {
       provides)    M_PROVIDES="$value" ;;
       install)     M_INSTALL="$value" ;;
       uninstall)   M_UNINSTALL="$value" ;;
+      hook.*)      M_HOOKS="${M_HOOKS}${key#hook.}=${value}"$'\n' ;;
     esac
   done < "$file"
 }
@@ -201,6 +219,27 @@ check_rule() {
     *" $cmd "*) ;;
     *) fail "$EXIT_INVALID" "BAD_RULE $provider $rule: $cmd is not in provides" ;;
   esac
+}
+
+# check_hook <event> <cmd> <dir>: the command is a regular executable file of the plugin (no link, no ..),
+# followed by literal arguments only, so the state names exactly what runs.
+check_hook() {
+  local event="$1" cmd="$2" dir="$3" path part rest
+  [[ $cmd =~ $HOOK_RE ]] || fail "$EXIT_INVALID" "BAD_MANIFEST hook.$event: not <relative path> [literal args]: $cmd"
+  path="${BASH_REMATCH[1]}"
+  rest="$path"
+  while :; do
+    part="${rest%%/*}"
+    case "$part" in .|..|-*) fail "$EXIT_INVALID" "BAD_MANIFEST hook.$event: invalid path $path" ;; esac
+    [ "$part" != "$rest" ] || break
+    rest="${rest#*/}"
+  done
+  rest="$dir"
+  for part in $(printf '%s' "$path" | tr '/' ' '); do
+    rest="$rest/$part"
+    [ ! -L "$rest" ] || fail "$EXIT_INVALID" "INVALID hook.$event: $path goes through a link"
+  done
+  [ -f "$dir/$path" ] && [ -x "$dir/$path" ] || fail "$EXIT_INVALID" "INVALID hook.$event: $path is not an executable file"
 }
 
 # check_names <kind> <list> <dir>: every name is a slug with the plugin prefix, exists in the plugin and
@@ -232,7 +271,7 @@ validate_plugin() {
   case "$M_PREFIX" in *-) is_slug "${M_PREFIX%-}" ;; *) false ;; esac \
     || fail "$EXIT_INVALID" "BAD_MANIFEST prefix: not a slug ending in -: $M_PREFIX"
   [ "${#M_DESC}" -le 200 ] || fail "$EXIT_INVALID" "BAD_MANIFEST description: longer than 200 characters"
-  case "$M_DESC$M_INSTALL$M_UNINSTALL" in *[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_MANIFEST control character in a value" ;; esac
+  case "$M_DESC$M_INSTALL$M_UNINSTALL$(printf '%s' "$M_HOOKS" | tr '\n' ' ')" in *[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_MANIFEST control character in a value" ;; esac
   case "$M_REQUIRES$M_PROVIDES" in *[!A-Za-z0-9._\ -]*) fail "$EXIT_INVALID" "BAD_MANIFEST requires, provides: invalid command name" ;; esac
   local c
   for c in $M_PROVIDES; do
@@ -240,6 +279,10 @@ validate_plugin() {
   done
   check_names skills "$M_SKILLS" "$dir"
   check_names agents "$M_AGENTS" "$dir"
+  local hook
+  while IFS= read -r hook; do
+    if [ -n "$hook" ]; then check_hook "${hook%%=*}" "${hook#*=}" "$dir"; fi
+  done <<< "$M_HOOKS"
   while IFS= read -r rule; do
     if [ -n "$rule" ]; then check_rule claude "$rule"; fi
   done <<< "$M_ALLOW_CLAUDE"
@@ -304,6 +347,7 @@ print_plan() {
   done
   if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
   if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+  printf '%s' "$M_HOOKS" | awk 'NF { i = index($0, "="); print "HOOK " substr($0, 1, i - 1) " " substr($0, i + 1) }'
   check_opencode_gate
   print_dropped
 }
@@ -328,6 +372,7 @@ write_state() {
     printf 'version=%s\nskills=%s\nagents=%s\nprovides=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_PROVIDES" "$M_UNINSTALL"
     claude_rules | awk 'NF { print "allow.claude=" $0 }'
     printf '%s' "$M_ALLOW_OPENCODE" | awk 'NF { print "allow.opencode=" $0 }'
+    printf '%s' "$M_HOOKS" | awk 'NF { print "hook." $0 }'
   } > "$tmp"
   mv "$tmp" "$file"
 }
@@ -760,6 +805,37 @@ cmd_sync() {
   done
 }
 
+# run-hook <event> <args>...: run the hook.<event> of each installed plugin, from its state, in its folder,
+# with <args> appended. Each stdout line of a hook goes out as HOOK <name> <line>; its stderr passes as it
+# is. Every hook runs even after one fails; then exit 15.
+cmd_run_hook() {
+  [ $# -ge 1 ] || die "run-hook needs an event"
+  local event="$1" state name dir cmd path args rc failed=0 out
+  shift
+  case "$HOOK_EVENTS" in *" $event "*) ;; *) die "unknown hook event: $event" ;; esac
+  for state in "$PLUGINS"/.*.state; do
+    [ -f "$state" ] || continue
+    name="${state##*/.}"
+    name="${name%.state}"
+    cmd="$(conf_value "$state" "hook.$event" | awk 'NR == 1')"
+    [ -n "$cmd" ] || continue
+    dir="$PLUGINS/$name"
+    path="${cmd%% *}"
+    if [ ! -x "$dir/$path" ]; then echo "HOOK_FAILED $name missing"; failed=1; continue; fi
+    if [ -n "$(dirty_reason "$dir" "$(state_value "$name" commit)")" ]; then
+      echo "HOOK_FAILED $name modified"; failed=1; continue
+    fi
+    args="${cmd#"$path"}"
+    rc=0
+    # The arguments in the state are literal words (check_hook), so splitting them is safe.
+    # shellcheck disable=SC2086
+    out="$(cd "$dir" && "./$path" $args "$@")" || rc=$?
+    if [ -n "$out" ]; then printf '%s\n' "$out" | awk -v n="$name" 'NF { print "HOOK " n " " $0 }'; fi
+    if [ "$rc" -ne 0 ]; then echo "HOOK_FAILED $name $rc"; failed=1; fi
+  done
+  if [ "$failed" -eq 1 ]; then exit "$EXIT_HOOK"; fi
+}
+
 cmd_apply() {
   local what="${1:-}"
   [ $# -gt 0 ] && shift
@@ -794,7 +870,8 @@ main() {
     list)   cmd_list "$@" ;;
     check)  cmd_check "$@" ;;
     sync)   cmd_sync "$@" ;;
-    *)      die "unknown command: $cmd (add, update, remove, apply, list, check, sync)" ;;
+    run-hook) cmd_run_hook "$@" ;;
+    *)      die "unknown command: $cmd (add, update, remove, apply, list, check, sync, run-hook)" ;;
   esac
 }
 

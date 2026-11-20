@@ -12,7 +12,7 @@ allowed-tools: Bash(skills/repo-create/scripts/repo-create.sh plan *)
 
 > Use this skill; do not run `gh repo create`, `git clone` or the script on your own. The procedure below decides what to ask and when to stop.
 
-Creates `<owner>/<name>` on GitHub and clones it into `source/<name>` (through the `repo-clone` script), so the other skills (`worktree-create`, `npm-run`...) work on it right away.
+Creates `<owner>/<name>` on GitHub and clones it into `source/<name>` (through the `repo-clone` script), so the other skills (`worktree-create`, `worktree-config`...) work on it right away.
 All the work is done by `scripts/repo-create.sh` (in this skill's folder), run from the repo root. It never prompts. `plan` checks everything and writes nothing. Only `apply` creates the repo, and it is deliberately **not** pre-allowed: creating a repository on GitHub is visible to others, so the agent's own permission prompt shows the command to the user before it runs.
 
 ## Procedure

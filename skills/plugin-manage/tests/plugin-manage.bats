@@ -657,3 +657,98 @@ check_with() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage: plugin-manage.sh add"* ]] || false
 }
+
+# --- hooks ---------------------------------------------------------------------------
+
+# mk_hook: an executable hook script in the demo plugin that prints its args and folder, and exits with
+# $HOOK_EXIT; the manifest declares it as hook.worktree-remove with one literal argument.
+mk_hook() {
+  printf '#!/usr/bin/env bash\necho "ran $* in ${PWD##*/}"\nexit "${HOOK_EXIT:-0}"\n' > "$ORIGIN/skills/demo-hello/scripts/on-remove.sh"
+  chmod +x "$ORIGIN/skills/demo-hello/scripts/on-remove.sh"
+  write_conf 'hook.worktree-remove=skills/demo-hello/scripts/on-remove.sh --quiet'
+  commit_origin hook
+}
+
+@test "a hook is shown in the plan and kept in the state" {
+  mk_hook
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 0 ]
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qxF "HOOK worktree-remove skills/demo-hello/scripts/on-remove.sh --quiet" || false
+  add_demo
+  state | grep -qxF "hook.worktree-remove=skills/demo-hello/scripts/on-remove.sh --quiet" || false
+}
+
+@test "check rejects unknown hook events, repeated hooks and commands that are not a plugin file with literal args" {
+  mk_hook
+  check_with 'hook.build=skills/demo-hello/scripts/on-remove.sh'
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 14: unknown hook event build" ] || false
+  check_with 'hook.worktree-remove=skills/demo-hello/scripts/on-remove.sh' 'hook.worktree-remove=skills/demo-hello/scripts/on-remove.sh'
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST line 15: duplicate key hook.worktree-remove" ] || false
+  for bad in '/bin/sh' '../x/on-remove.sh' 'skills/../skills/demo-hello/scripts/on-remove.sh' \
+             'skills/demo-hello/scripts/on-remove.sh $HOME' 'skills/demo-hello/scripts/on-remove.sh; rm x' \
+             'skills/demo-hello/scripts/on-remove.sh *' 'skills/demo-hello/scripts/on-remove.sh "a b"' \
+             '-x' ''; do
+    check_with "hook.worktree-remove=$bad"
+    [ "$status" -eq 4 ] || { echo "accepted: $bad"; false; }
+    [[ "$output" == BAD_MANIFEST* ]] || { echo "$bad: $output"; false; }
+  done
+  check_with 'hook.worktree-remove=skills/demo-hello/scripts/hello.sh'
+  [ "$status" -eq 4 ] && [ "$output" = "INVALID hook.worktree-remove: skills/demo-hello/scripts/hello.sh is not an executable file" ] || false
+  check_with 'hook.worktree-remove=skills/demo-hello/scripts/nope.sh'
+  [ "$status" -eq 4 ] && [ "$output" = "INVALID hook.worktree-remove: skills/demo-hello/scripts/nope.sh is not an executable file" ] || false
+  ln -s scripts "$ORIGIN/skills/demo-hello/bin"
+  check_with 'hook.worktree-remove=skills/demo-hello/bin/on-remove.sh'
+  [ "$status" -eq 4 ] && [ "$output" = "INVALID hook.worktree-remove: skills/demo-hello/bin/on-remove.sh goes through a link" ] || false
+}
+
+@test "run-hook runs each installed hook in its plugin folder with its args, and prefixes its lines" {
+  mk_hook
+  add_demo
+  run "$SCRIPT" run-hook worktree-remove a/feat/x
+  [ "$status" -eq 0 ]
+  [ "$output" = "HOOK demo ran --quiet a/feat/x in demo" ]
+}
+
+@test "run-hook does nothing without plugins or hooks" {
+  run "$SCRIPT" run-hook worktree-remove a/feat/x
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  add_demo
+  run "$SCRIPT" run-hook worktree-remove a/feat/x
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "run-hook reports a failed hook with its exit code and exits 15" {
+  mk_hook
+  add_demo
+  HOOK_EXIT=3 run "$SCRIPT" run-hook worktree-remove a/feat/x
+  [ "$status" -eq 15 ]
+  [ "${lines[0]}" = "HOOK demo ran --quiet a/feat/x in demo" ]
+  [ "${lines[1]}" = "HOOK_FAILED demo 3" ]
+}
+
+@test "run-hook never runs the hook of a modified clone" {
+  mk_hook
+  add_demo
+  printf '#!/usr/bin/env bash\ntouch "%s/ran"\n' "$BATS_TEST_TMPDIR" > "$SANDBOX/plugins/demo/skills/demo-hello/scripts/on-remove.sh"
+  run "$SCRIPT" run-hook worktree-remove a/feat/x
+  [ "$status" -eq 15 ]
+  [ "$output" = "HOOK_FAILED demo modified" ]
+  [ ! -e "$BATS_TEST_TMPDIR/ran" ]
+}
+
+@test "run-hook reports a hook whose file is gone, and refuses unknown events" {
+  mk_hook
+  add_demo
+  rm "$SANDBOX/plugins/demo/skills/demo-hello/scripts/on-remove.sh"
+  run "$SCRIPT" run-hook worktree-remove a/feat/x
+  [ "$status" -eq 15 ]
+  [ "$output" = "HOOK_FAILED demo missing" ]
+  run "$SCRIPT" run-hook build x
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" run-hook
+  [ "$status" -eq 2 ]
+}

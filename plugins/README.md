@@ -65,8 +65,23 @@ allow.opencode=my-tool *
 | `requires` | no | System commands that must be installed; checked, never installed |
 | `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet; after `install` all of them must |
 | `install` / `uninstall` | no | Command run in the plugin folder after add or update / before remove. No time limit |
+| `hook.<event>` | no, one per event | Command arness runs in the plugin folder on `<event>`, with the event's arguments appended. See *Hooks* |
 | `allow.claude` | no, repeatable | Claude Code rule, rendered into `.claude/settings.json` together with `Skill(<n>)` for each skill. That file is generated: every `apply` renders it again from `providers/claude/settings.json` and the plugin rules, so a line added there by hand is lost (the plan lists it as `DROPPED_SETTING`). Your own rules go in `.claude/settings.local.json` |
 | `allow.opencode` | no, repeatable | OpenCode bash rule; printed for you to add to `opencode.json`, which setup never edits |
+
+### Hooks
+
+A hook lets a plugin clean up after itself when arness does something, without arness knowing the plugin. The value is a relative path to an executable file of the plugin (no `..`, no link on the way), then literal arguments (letters, digits and `._/=:@+,-`; no quotes, `$`, `;`, `|` or wildcards): `check` refuses anything else.
+
+| Event | Run by | Arguments appended | A failure |
+|---|---|---|---|
+| `worktree-remove` | `worktree-clean`, before it removes a worktree | `<repo>/<name>` | keeps the worktree (`hook-failed`) |
+
+```
+hook.worktree-remove=skills/my-run/scripts/my-run.sh worktree-remove
+```
+
+`plugin-manage.sh run-hook <event> <args>` runs the hook of every installed plugin, from its state, and prints each line the hook prints as `HOOK <name> <line>`; a hook that exits non-zero gives `HOOK_FAILED <name> <code>` and `run-hook` exits 15 after running the rest. The hook of a `MODIFIED` clone is never run (`HOOK_FAILED <name> modified`), nor one whose file is gone (`missing`). A hook prints only what is worth reporting, nothing when it did nothing, and runs with `ARNESS_ROOT` set. The plan shows each hook as `HOOK <event> <command>`.
 
 ### Permission rules
 

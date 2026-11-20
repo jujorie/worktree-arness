@@ -20,9 +20,9 @@
 #   HEAD, else "-". It is EMPTY, or NOT_MERGED with ahead = commits on its HEAD that no branch, remote
 #   branch or tag holds (lost on removal). Removing it deletes no branch.
 # remove stdout, per NAME (exit 13 if any SKIPPED):
-#   STOPPED <repo>/<name> <script> <pid>   an npm script npm-run started there, stopped before removing it
+#   HOOK <plugin> <line>           what a plugin's worktree-remove hook did there, before removing it
 #   REMOVED <path>
-#   SKIPPED <path|name> <reason>   reason: invalid-name | not-a-worktree | git-failed | stop-failed |
+#   SKIPPED <path|name> <reason>   reason: invalid-name | not-a-worktree | git-failed | hook-failed |
 #                                  rm-failed | NOT_MERGED | DIRTY | UNKNOWN_BASE (these three need --force)
 #   If git unregisters a worktree but leaves part of its dir, the rest is deleted with rm -rf and a note
 #   goes to stderr, on any OS. Git for Windows does that with exit 0 when the dir holds a junction (npm
@@ -30,9 +30,10 @@
 #   still lists is skipped.
 #   rm-failed: git let the worktree go and its branch is deleted, but part of the dir is still in use;
 #   it is no longer a worktree, so the user can delete it once whatever holds it is closed.
-# Before a worktree is removed, the npm scripts npm-run started in it (dev servers, watchers) are stopped
-# with `npm-run.sh stop --worktree <repo>/<name>`: once its folder is gone they would keep running and
-# holding their ports. If that stop fails the worktree is kept (stop-failed).
+# Before a worktree is removed, the hook.worktree-remove of every installed plugin runs with <repo>/<name>
+# (`plugin-manage.sh run-hook worktree-remove <repo>/<name>`), e.g. to stop the dev servers a plugin
+# started there: once its folder is gone they would keep running. If a hook fails the worktree is kept
+# (hook-failed). Without plugins/ nothing runs.
 # The base of a branch worktree is read from git config branch.<name>.arness-base (set by worktree-create);
 # --base is the fallback when it is missing. A detached worktree uses arness-worktree.<name>.base instead
 # (also set by worktree-create), or else a branch or tag at its HEAD, or "-".
@@ -105,20 +106,17 @@ pushed() {
   [ "$remote_tip" = "$local_tip" ] || git -C "$repo_dir" merge-base --is-ancestor "$branch" "$remote_tip" 2>/dev/null
 }
 
-# Stop what npm-run started in worktree <repo>/<name> and pass its STOPPED lines on. Nothing to do when
-# npm-run has no state for it. Args: slug
-stop_npm_scripts() {
-  local slug="$1" npm_run="$ROOT/skills/npm-run/scripts/npm-run.sh" out
-  [ -d "$ROOT/tmp/npm-run/$slug" ] || return 0
-  if [ ! -x "$npm_run" ]; then
-    echo "warning: npm-run not found; cannot stop the npm scripts of $slug" >&2
+# Run the plugins' worktree-remove hooks for worktree <repo>/<name> and pass their HOOK lines on. Nothing
+# to do without plugins/. Args: slug
+run_remove_hooks() {
+  local slug="$1" pm="$ROOT/skills/plugin-manage/scripts/plugin-manage.sh" out rc=0
+  [ -d "$ROOT/plugins" ] || return 0
+  out="$(ARNESS_ROOT="$ROOT" "$pm" run-hook worktree-remove "$slug")" || rc=$?
+  printf '%s\n' "$out" | grep '^HOOK ' || true
+  if [ "$rc" -ne 0 ]; then
+    echo "warning: a worktree-remove hook failed for $slug: $(printf '%s\n' "$out" | grep -v '^HOOK ' | tr '\n' ' ')" >&2
     return 1
   fi
-  if ! out="$(ARNESS_ROOT="$ROOT" "$npm_run" stop --worktree "$slug")"; then
-    echo "warning: npm-run stop failed for $slug: $out" >&2
-    return 1
-  fi
-  printf '%s\n' "$out" | grep '^STOPPED ' || true
 }
 
 # Print the ref a detached worktree shows: the one worktree-create recorded, else a branch or tag at its HEAD
@@ -312,7 +310,7 @@ EOF_ROW
       MERGED|PR_MERGED|PUSHED|EMPTY) ;;
       *) if [ "$FORCE" -eq 0 ]; then echo "SKIPPED $f_path $status"; skipped=1; continue; fi ;;
     esac
-    stop_npm_scripts "$repo/$name" || { echo "SKIPPED $f_path stop-failed"; skipped=1; continue; }
+    run_remove_hooks "$repo/$name" || { echo "SKIPPED $f_path hook-failed"; skipped=1; continue; }
 
     rc=0
     remove_worktree "$repo_dir" "$f_path" || rc=$?
