@@ -1,6 +1,9 @@
 ---
 name: repo-clone
-description: Clone a git repository into this workspace's source/ folder. Use whenever the user asks to clone, download, fetch or get a repo from a URL (https, ssh, git@), e.g. "clona el repo", "baja el repositorio". Always use this skill, never `git clone` or its script directly.
+description: >-
+  Clone a git repository into this workspace's source/ folder. Use whenever the user asks to
+  clone, download, fetch or get a repo from a URL (https, ssh, git@), e.g. "clona el repo", "baja
+  el repositorio". Always use this skill, never `git clone` or its script directly.
 allowed-tools: Bash(skills/repo-clone/scripts/repo-clone.sh *)
 ---
 

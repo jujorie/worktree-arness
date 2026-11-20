@@ -1,6 +1,13 @@
 ---
 name: npm-run
-description: Run an npm script of a worktree in the background, wait for it to end with its exit code, and list, stop or clean up the ones started. Use whenever the user asks to run, start, launch, wait for, list, stop or clean up an npm script in a worktree, or needs to know whether tests, checks or a build passed, e.g. "lanza npm start en el worktree", "arranca el dev server", "ejecuta los tests de X", "espera a que terminen los tests", "para el start", "limpia los logs de npm". Always use this skill, never `npm run` or its script directly. Fails with NO_COMMAND, UNKNOWN_SCRIPT, NO_PACKAGE_JSON or NO_NODE_VERSION.
+description: >-
+  Run an npm script of a worktree in the background, wait for it to end with its exit code, and
+  list, stop or clean up the ones started. Use whenever the user asks to run, start, launch, wait
+  for, list, stop or clean up an npm script in a worktree, or needs to know whether tests, checks
+  or a build passed, e.g. "lanza npm start en el worktree", "arranca el dev server", "ejecuta los
+  tests de X", "espera a que terminen los tests", "para el start", "limpia los logs de npm".
+  Always use this skill, never `npm run` or its script directly. Fails with NO_COMMAND,
+  UNKNOWN_SCRIPT, NO_PACKAGE_JSON or NO_NODE_VERSION.
 allowed-tools: Bash(skills/npm-run/scripts/npm-run.sh *)
 ---
 

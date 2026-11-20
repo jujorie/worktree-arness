@@ -1,6 +1,10 @@
 ---
 name: plugin-manage
-description: Add, update, remove, list or check arness plugins, git repos that bring their own skills, agents and tools into plugins/. Use whenever the user asks to install, add, update, upgrade, remove, uninstall or list a plugin, e.g. "instala el plugin X", "actualiza los plugins", "qué plugins hay". Always use this skill, never `git clone` into plugins/ or its script directly.
+description: >-
+  Add, update, remove, list or check arness plugins, git repos that bring their own skills, agents
+  and tools into plugins/. Use whenever the user asks to install, add, update, upgrade, remove,
+  uninstall or list a plugin, e.g. "instala el plugin X", "actualiza los plugins", "qué plugins
+  hay". Always use this skill, never `git clone` into plugins/ or its script directly.
 allowed-tools: Bash(skills/plugin-manage/scripts/plugin-manage.sh add *), Bash(skills/plugin-manage/scripts/plugin-manage.sh update *), Bash(skills/plugin-manage/scripts/plugin-manage.sh remove *), Bash(skills/plugin-manage/scripts/plugin-manage.sh list), Bash(skills/plugin-manage/scripts/plugin-manage.sh check *)
 ---
 

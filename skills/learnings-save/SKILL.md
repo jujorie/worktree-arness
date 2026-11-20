@@ -1,6 +1,10 @@
 ---
 name: learnings-save
-description: Review the conversation for what was learned and save each item where it belongs (memory, CODESTYLE, a skill, a README), so nothing is lost when the context is cleared. Use when the user asks "algo que recordar antes del clear?", "guarda lo aprendido", "save what you learned" or "wrap up the session", or before /clear or /compact.
+description: >-
+  Review the conversation for what was learned and save each item where it belongs (memory,
+  CODESTYLE, a skill, a README), so nothing is lost when the context is cleared. Use when the user
+  asks "algo que recordar antes del clear?", "guarda lo aprendido", "save what you learned" or
+  "wrap up the session", or before /clear or /compact.
 ---
 
 # learnings-save

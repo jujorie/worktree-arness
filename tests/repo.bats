@@ -329,6 +329,15 @@ EOF
   done < <(shared_skill_dirs "$REPO_ROOT")
 }
 
+@test "every shared skill writes its description as a folded block" {
+  local d bad=""
+  while IFS= read -r d; do
+    # description: >-, then lines indented by two spaces (CODESTYLE.md): any text stays valid YAML.
+    awk '/^description: >-$/ { getline; ok = /^  [^ ]/ } END { exit !ok }' "$d/SKILL.md" || bad="$bad $(basename "$d")"
+  done < <(shared_skill_dirs "$REPO_ROOT")
+  [ -z "$bad" ] || { echo "description is not a folded block (description: >-):$bad"; false; }
+}
+
 # The Agent Skills reference validator (https://agentskills.io/specification), pinned. Provider-neutral
 # checks of each SKILL.md frontmatter: valid YAML, name format equal to the folder, description length.
 # Its PyPI package is skills-ref, its executable agentskills.

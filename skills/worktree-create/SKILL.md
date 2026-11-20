@@ -1,6 +1,11 @@
 ---
 name: worktree-create
-description: Create a git worktree and its branch for a task from a repo in source/, or check out an existing branch as it is (detached, e.g. a release), then apply config/<repo>/ to it. Use whenever the user asks to create, open or start a worktree or working branch, e.g. "crea un worktree", "nuevo worktree para X", "monta la rama release/1.2". Always use this skill, never `git worktree add` or its script directly. Fails with NO_SOURCE or NO_NAME.
+description: >-
+  Create a git worktree and its branch for a task from a repo in source/, or check out an existing
+  branch as it is (detached, e.g. a release), then apply config/<repo>/ to it. Use whenever the
+  user asks to create, open or start a worktree or working branch, e.g. "crea un worktree", "nuevo
+  worktree para X", "monta la rama release/1.2". Always use this skill, never `git worktree add`
+  or its script directly. Fails with NO_SOURCE or NO_NAME.
 allowed-tools: Bash(skills/worktree-create/scripts/worktree-create.sh *)
 ---
 

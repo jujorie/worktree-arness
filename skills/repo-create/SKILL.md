@@ -1,6 +1,10 @@
 ---
 name: repo-create
-description: Create a new GitHub repository with gh and clone it into this workspace's source/ folder, ready for worktree-create. Use whenever the user asks to create, make or start a new repo, e.g. "crea un repo nuevo", "new repo my-org/my-service". Always use this skill, never `gh repo create` or its script directly.
+description: >-
+  Create a new GitHub repository with gh and clone it into this workspace's source/ folder, ready
+  for worktree-create. Use whenever the user asks to create, make or start a new repo, e.g. "crea
+  un repo nuevo", "new repo my-org/my-service". Always use this skill, never `gh repo create` or
+  its script directly.
 allowed-tools: Bash(skills/repo-create/scripts/repo-create.sh plan *)
 ---
 

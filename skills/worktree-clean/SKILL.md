@@ -1,6 +1,10 @@
 ---
 name: worktree-clean
-description: List worktrees with their merge status and remove the ones the user picks. Use whenever the user asks to clean, list, prune or delete worktrees, e.g. "limpia los worktrees", "borra el worktree", "qué worktrees hay". Always use this skill, never `git worktree remove` or its script directly.
+description: >-
+  List worktrees with their merge status and remove the ones the user picks. Use whenever the user
+  asks to clean, list, prune or delete worktrees, e.g. "limpia los worktrees", "borra el
+  worktree", "qué worktrees hay". Always use this skill, never `git worktree remove` or its script
+  directly.
 allowed-tools: Bash(skills/worktree-clean/scripts/worktree-clean.sh *)
 ---
 
