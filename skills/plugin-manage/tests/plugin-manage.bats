@@ -1041,12 +1041,39 @@ write_catalog() {
   printf '%s\n' "$output" | grep -qxF "SOURCE $URL main branch" || false
 }
 
-@test "apply add <name> installs the official plugin" {
-  write_catalog "| demo | $URL | main | Demo plugin for tests |"
+@test "an official plugin is applied with the URL and ref its plan showed, never by name" {
+  git_q -C "$ORIGIN" tag v0.1.0
+  write_catalog "| demo | $URL | v0.1.0 | Demo plugin for tests |"
+  run "$SCRIPT" add demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qxF "SOURCE $URL v0.1.0 tag" || false
+  # apply re-reads nothing from the catalog: a row changed after the plan cannot change what installs.
   run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"apply add takes the URL"* ]] || false
+  [ ! -e "$SANDBOX/plugins/demo" ]
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 --ref v0.1.0 "$URL"
   [ "$status" -eq 0 ]
   [ "$(last_line)" = "ADDED demo $SANDBOX/plugins/demo" ]
-  state | grep -qxF "ref=main" || false
+  state | grep -qxF "ref=v0.1.0" || false
+}
+
+@test "catalog reads a PLUGINS.md checked out with CRLF line endings" {
+  write_catalog "| demo | $URL | main | Demo plugin for tests |"
+  awk '{ printf "%s\r\n", $0 }' "$SANDBOX/PLUGINS.md" > "$BATS_TEST_TMPDIR/crlf" && mv "$BATS_TEST_TMPDIR/crlf" "$SANDBOX/PLUGINS.md"
+  run "$SCRIPT" catalog
+  [ "$status" -eq 0 ]
+  [ "$output" = "OFFICIAL demo $URL main Demo plugin for tests" ]
+}
+
+@test "add <name> finds an entry early in a catalog bigger than a pipe buffer" {
+  local rows=() i
+  rows+=("| demo | $URL | main | Demo plugin for tests |")
+  for i in $(seq 1500); do rows+=("| p$i | https://example.com/p$i.git | v1.0.0 | Filler row $i to make the catalog bigger than 64 KB of pipe buffer |"); done
+  write_catalog "${rows[@]}"
+  run "$SCRIPT" add demo
+  [ "$status" -eq 20 ]
+  [ "${lines[0]}" = "CATALOG demo" ]
 }
 
 @test "add <name> refuses a name not in the catalog, and a catalog repo with another plugin name" {

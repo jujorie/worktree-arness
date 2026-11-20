@@ -6,7 +6,7 @@
 # Usage: plugin-manage.sh add [--ref REF] <url|name>                  plan only, writes nothing
 #        plugin-manage.sh update [--ref REF] [--no-fetch] <name>      plan only (fetches)
 #        plugin-manage.sh remove <name>                               plan only
-#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url|name>
+#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url>
 #        plugin-manage.sh apply update --commit SHA --adopted 0|1 [--ref REF] <name>
 #        plugin-manage.sh apply remove [--force] <name>
 #        plugin-manage.sh list
@@ -16,9 +16,10 @@
 #        plugin-manage.sh catalog
 #
 # PLUGINS.md at the arness root lists the official plugins in a table (Name | URL | Ref | Description).
-# catalog prints them; add and apply add take a name of it instead of a URL: its URL, and its Ref unless
-# --ref is given. The plugin's manifest must carry that name (CATALOG_MISMATCH otherwise). Being in the
-# catalog skips no check and no confirmation.
+# catalog prints them; add takes a name of it instead of a URL: its URL, and its Ref unless --ref is
+# given. The plugin's manifest must carry that name (CATALOG_MISMATCH otherwise). apply add then takes the
+# URL and ref of the plan's SOURCE line, never the name. Being in the catalog skips no check and no
+# confirmation.
 # add, update and remove only print the plan. Only `apply` changes anything; it is kept out of the
 # permission allowlists on purpose, so the agent's own tool prompt asks the user before it runs.
 # What arness uses of an installed plugin (rules, links, uninstall) comes from plugins/.<name>.state,
@@ -673,13 +674,13 @@ US=$'\037'   # field separator of catalog rows: never in a valid cell, and not I
 
 # catalog_rows: one line per row of the table under the header, fields separated by $US: line number,
 # name, url, ref, description. A bad row prints BAD_CATALOG and exits 4. Nothing without the file or the
-# table; the table ends at the first line that does not start with |.
+# table; the table ends at the first line that does not start with |. A trailing CR is dropped first: a
+# Windows checkout (core.autocrlf) has the same table.
 catalog_rows() {
   local file="$ROOT/$CATALOG_FILE" n row name url ref desc seen=" " cells
   [ -f "$file" ] || return 0
   while IFS= read -r n && IFS= read -r row; do
     [ "$row" != SEPARATOR_MISSING ] || fail "$EXIT_INVALID" "BAD_CATALOG line $n: the header is not followed by |---|"
-    case "$row" in *$'\r'*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: CRLF line ending" ;; esac
     case "$row" in *"$US"*|*$'\t'*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: control character" ;; esac
     cells="$(printf '%s' "$row" | tr -cd '|' | wc -c | tr -d ' ')"
     [ "$cells" -eq 5 ] || fail "$EXIT_INVALID" "BAD_CATALOG line $n: not 4 cells (Name | URL | Ref | Description)"
@@ -695,6 +696,7 @@ catalog_rows() {
     case "$desc" in *[[:cntrl:]]*) fail "$EXIT_INVALID" "BAD_CATALOG line $n: control character" ;; esac
     printf '%s\n' "$n$US$name$US$url$US$ref$US$desc"
   done < <(awk -v h="$CATALOG_HEADER" '
+    { sub(/\r$/, "") }
     !table { if ($0 == h) { table = 1; sep = 1 }; next }
     sep { sep = 0; if ($0 !~ /^\|[-: |]+\|$/) { print NR; print "SEPARATOR_MISSING"; exit }; next }
     /^\|/ { print NR; print; next }
@@ -722,13 +724,16 @@ cmd_catalog() {
 catalog_entry() {
   local line
   load_catalog
-  line="$(printf '%s\n' "$CATALOG_ROWS" | awk -F"$US" -v n="$1" '$2 == n { print; exit }')"
+  line="$(awk -F"$US" -v n="$1" '$2 == n && !found { print; found = 1 }' <<< "$CATALOG_ROWS")"
   [ -n "$line" ] || fail "$EXIT_NOT_IN_CATALOG" "NOT_IN_CATALOG $1"
   CAT_URL="$(printf '%s' "$line" | awk -F"$US" '{ print $3 }')"
   CAT_REF="$(printf '%s' "$line" | awk -F"$US" '{ print $4 }')"
 }
 
+# parse_add_args <plan|apply> <args>...: a bare name (plan only) is an official plugin of PLUGINS.md.
 parse_add_args() {
+  local mode="$1"
+  shift
   ARG_URL="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED="" ARG_CATALOG=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -742,6 +747,8 @@ parse_add_args() {
   [ -n "$ARG_URL" ] || die "missing plugin URL or name"
   # A bare name is an official plugin: its URL, and its ref unless --ref is given, come from PLUGINS.md.
   if is_slug "$ARG_URL"; then
+    # apply re-reads nothing: a catalog row changed after the plan must not change what installs.
+    [ "$mode" = plan ] || die "apply add takes the URL and --ref of the plan's SOURCE line, not a name: $ARG_URL"
     ARG_CATALOG="$ARG_URL"
     catalog_entry "$ARG_CATALOG"
     ARG_URL="$CAT_URL"
@@ -754,7 +761,7 @@ parse_add_args() {
 }
 
 cmd_add() {
-  parse_add_args "$@"
+  parse_add_args plan "$@"
   [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply add'"
   prepare_add "$ARG_URL" "$ARG_REF"
   if [ -n "$ARG_CATALOG" ]; then echo "CATALOG $ARG_CATALOG"; fi
@@ -763,7 +770,7 @@ cmd_add() {
 }
 
 apply_add() {
-  parse_add_args "$@"
+  parse_add_args apply "$@"
   validate_full_commit "$ARG_COMMIT" || die "apply add needs --commit <full 40-character sha> from the plan (CONFIRM_ADD)"
   [ -n "$ARG_ADOPTED" ] || die "apply add needs --adopted 0|1 from the plan (CONFIRM_ADD)"
   prepare_add "$ARG_URL" "$ARG_REF"

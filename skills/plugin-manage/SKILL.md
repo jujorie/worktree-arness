@@ -43,7 +43,7 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 | error on stderr | 3 | Clone or fetch failed (network, auth, wrong URL). Show the git error. |
 
 3. Run the confirmed change, with the full 40-character commit and the `<adopted>` (`0` or `1`, the last field of `CONFIRM_ADD` / `CONFIRM_UPDATE`) from the plan, so what runs is what was shown:
-   - `... apply add --commit <commit> --adopted <adopted> [--ref <same ref>] <same url or name>`
+   - `... apply add --commit <commit> --adopted <adopted> --ref <ref> <url>`, with the URL and ref of the plan's `SOURCE` line, also for an official plugin planned by name: `apply` never takes a name, so a catalog row changed after the plan cannot change what installs
    - `... apply update --commit <to> --adopted <adopted> --ref <ref> <name>` (the `<ref>` of `CONFIRM_UPDATE`)
    - `... apply remove <name>`
 
