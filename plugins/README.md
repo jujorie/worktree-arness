@@ -63,7 +63,8 @@ allow.opencode=my-tool *
 | `skills` | no | Space-separated names; each has `skills/<n>/SKILL.md` with `name: <n>` |
 | `agents` | no | Space-separated names; each has `agents/<n>.md` with `name: <n>` |
 | `requires` | no | System commands that must be installed; checked, never installed |
-| `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet; after `install` all of them must |
+| `provides` | no | Commands the plugin's `install` puts on the `PATH`. On a first install none of them may exist yet, unless adopted (`adopt`); after `install` all of them must |
+| `adopt` | no, repeatable | `<command> <path under $HOME>`: where the plugin's `install` puts a command it provides, e.g. `adopt=my-tool .local/share/uv/tools/my-plugin/bin/my-tool`. A command already on the `PATH` whose links lead exactly there is the plugin's own, installed by it from another arness or by hand: it is adopted instead of refused. See *Shared commands* |
 | `install` / `uninstall` | no | Command run in the plugin folder after add or update / before remove. No time limit |
 | `allow.claude` | no, repeatable | Claude Code rule, rendered into `.claude/settings.json` together with `Skill(<n>)` for each skill. That file is generated: every `apply` renders it again from `providers/claude/settings.json` and the plugin rules, so a line added there by hand is lost (the plan lists it as `DROPPED_SETTING`). Your own rules go in `.claude/settings.local.json` |
 | `allow.opencode` | no, repeatable | OpenCode bash rule; printed for you to add to `opencode.json`, which setup never edits |
@@ -75,6 +76,12 @@ A rule is `Bash(<command> [args])` (OpenCode: `<command> [args]`) for a `<comman
 System commands from `requires` get no rules: `Bash(uv --version)` or `Bash(rm -rf x)` is `BAD_RULE`. The agent asks before running them, as it does for any command.
 
 A command that runs arbitrary code from its arguments is also refused in `provides`: shells, `env`, `sudo`, `xargs`, `git`, `find`, `ssh`, `curl`, `docker`, package managers (`uv`, `npm`, `pip`, `cargo`, `go`...) and interpreters, versioned names included (`python3.12`, `node20`, `gawk`). See `RUNNERS` and `RUNNER_RE` in the script. Other tools (`Read(...)`, `Write(...)`, `WebFetch(...)`) are not accepted at all. Any violation is `BAD_RULE`. The example manifest above is checked by the tests (`plugin-manage.bats`), so it always passes `check`.
+
+### Shared commands
+
+A command such as `uv tool install` puts is installed once per machine, not per arness. When every command in `provides` is already installed at its `adopt` path, `add` adopts them: the plan shows `ADOPT <command> <path>` and `INSTALL_SKIPPED`, `apply` does not run `install`, and the state records `adopted=1`. Then `remove` does not run `uninstall` (`UNINSTALL_SKIPPED`), so the other arness keeps its command, and `update` does not run `install` while the command is there; once it is gone, `update` installs it and this arness owns it from then on. A plugin this arness installed itself keeps running `install` on every update.
+
+Only the path is compared, nothing of the plugin runs before you confirm. A command at any other path is still refused, so `adopt` cannot claim a system command.
 
 ## Providers
 

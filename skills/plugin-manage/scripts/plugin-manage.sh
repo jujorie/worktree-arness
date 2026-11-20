@@ -30,6 +30,12 @@
 #   OPENCODE_UNGATED <file>               that opencode.json lets OpenCode run `apply` without asking:
 #                                         it lacks the "ask" rule of providers/opencode/opencode.json
 #   INSTALL <cmd> | UNINSTALL <cmd>       command run in the plugin folder by apply
+#   ADOPT <command> <path>                a provided command already installed at the path its adopt= line
+#                                         declares (e.g. by this plugin from another arness): it is used
+#                                         as it is
+#   INSTALL_SKIPPED <cmd> | UNINSTALL_SKIPPED <cmd>
+#                                         every provided command is adopted: apply does not run install,
+#                                         and remove does not run uninstall (the command is not ours)
 #   DROPPED_SETTING <line>                a line of .claude/settings.json edited by hand (no template or
 #                                         plugin rule gives it): apply renders the file again and loses
 #                                         it. Move it to .claude/settings.local.json before apply
@@ -74,6 +80,8 @@ SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 # trailing " *".
 CLAUDE_RULE_RE='^Bash\(([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?\)$'
 OPENCODE_RULE_RE='^([A-Za-z0-9._+-]+)(( [A-Za-z0-9._/=:@+,-]+)*)( \*)?$'
+# adopt=<command> <path relative to $HOME>
+ADOPT_RE='^([A-Za-z0-9._-]+) ([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$'
 # Commands that run arbitrary code from their arguments: no rule may name them, even with literal
 # arguments. Versioned names (python3.12, node20, gawk) are caught by RUNNER_RE.
 RUNNERS=" bash sh zsh dash ksh fish csh tcsh pwsh powershell env sudo su doas xargs eval exec command nohup"
@@ -84,6 +92,7 @@ RUNNER_RE='^(python|pypy|node|nodejs|ruby|perl|php|lua|luajit|g?awk|mawk|nawk|gs
 OPENCODE_APPLY_RULE='"skills/plugin-manage/scripts/plugin-manage.sh apply *": "ask"'
 
 ROOT="" PLUGINS=""
+ADOPTED=0    # 1: every provided command is adopted, install and uninstall do not run (check_provides)
 TMP_DIR=""   # global: the EXIT trap runs after main() returns
 cleanup() { if [ -n "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi; }
 
@@ -142,7 +151,7 @@ is_slug() { [[ $1 =~ $SLUG_RE ]]; }
 parse_manifest() {
   local file="$1" line key value n=0 seen=" "
   M_NAME="" M_VERSION="" M_PREFIX="" M_ARNESS="" M_DESC="" M_SKILLS="" M_AGENTS="" M_REQUIRES="" M_PROVIDES=""
-  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE=""
+  M_INSTALL="" M_UNINSTALL="" M_ALLOW_CLAUDE="" M_ALLOW_OPENCODE="" M_ADOPT=""
   [ -f "$file" ] || fail "$EXIT_INVALID" "BAD_MANIFEST missing $MANIFEST"
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -157,6 +166,7 @@ parse_manifest() {
     case "$key" in
       allow.claude)   M_ALLOW_CLAUDE="${M_ALLOW_CLAUDE}${value}"$'\n'; continue ;;
       allow.opencode) M_ALLOW_OPENCODE="${M_ALLOW_OPENCODE}${value}"$'\n'; continue ;;
+      adopt)          M_ADOPT="${M_ADOPT}${value}"$'\n'; continue ;;
       name|version|prefix|arness|description|skills|agents|requires|provides|install|uninstall) ;;
       *) fail "$EXIT_INVALID" "BAD_MANIFEST line $n: unknown key $key" ;;
     esac
@@ -217,6 +227,23 @@ check_names() {
   done
 }
 
+# check_adopt: each adopt line is "<command> <path>", once per command, for a command in provides,
+# with a plain relative path (no "..", ".", empty segments or leading /) that is read under $HOME.
+check_adopt() {
+  local line c p seen=" " seg
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [[ $line =~ $ADOPT_RE ]] || fail "$EXIT_INVALID" "BAD_MANIFEST adopt: not <command> <path under \$HOME>: $line"
+    c="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}"
+    case " $M_PROVIDES " in *" $c "*) ;; *) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $c is not in provides" ;; esac
+    case "$seen" in *" $c "*) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: duplicate command $c" ;; esac
+    seen="$seen$c "
+    for seg in ${p//\// }; do
+      case "$seg" in .|..) fail "$EXIT_INVALID" "BAD_MANIFEST adopt: $p has a . or .. segment" ;; esac
+    done
+  done <<< "$M_ADOPT"
+}
+
 # validate_plugin <dir>: parse and check the manifest and that what it declares exists.
 validate_plugin() {
   local dir="$1" rule
@@ -240,6 +267,7 @@ validate_plugin() {
   done
   check_names skills "$M_SKILLS" "$dir"
   check_names agents "$M_AGENTS" "$dir"
+  check_adopt
   while IFS= read -r rule; do
     if [ -n "$rule" ]; then check_rule claude "$rule"; fi
   done <<< "$M_ALLOW_CLAUDE"
@@ -255,13 +283,48 @@ check_requirements() {
   done
 }
 
-# check_provides_free: before a first install, a command the plugin says it provides must not exist
-# yet, or its " *" rule would grant a system command (provides=rm).
-check_provides_free() {
-  local c
+# real_path <path>: the file a path leads to, every link followed portably (bash 3.2, BSD readlink); fails
+# when it does not exist or the links loop.
+real_path() {
+  local p="$1" t n=0
+  while [ -L "$p" ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$((n + 1))
+    [ "$n" -le 40 ] || return 1
+  done
+  [ -e "$p" ] || return 1
+  printf '%s/%s\n' "$(cd -P "$(dirname "$p")" && pwd -P)" "$(basename "$p")"
+}
+
+# adopted_path <command>: the real path of the command when it is already installed where its adopt=
+# line says ($HOME/<path>); empty otherwise. Nothing of the plugin runs: the path is only compared.
+adopted_path() {
+  local c="$1" rel found want
+  rel="$(printf '%s' "$M_ADOPT" | awk -v c="$c" '$1 == c { print $2; exit }')"
+  [ -n "$rel" ] && [ -n "${HOME:-}" ] || return 0
+  found="$(command -v "$c" 2>/dev/null)" || return 0
+  case "$found" in /*) ;; *) return 0 ;; esac
+  found="$(real_path "$found")" || return 0
+  want="$(real_path "$HOME/$rel")" || return 0
+  if [ "$found" = "$want" ]; then printf '%s\n' "$found"; fi
+}
+
+# check_provides <old provides> <old adopted>: a command the plugin provides must not exist yet (or
+# its " *" rule would grant a system command, provides=rm) unless the installed version already
+# provided it or it is adopted: installed at its adopt= path. Sets ADOPTED=1 when install is not to
+# run: every provided command is adopted, on a first install or when the installed version was
+# adopted too (one this arness installed keeps being updated by it).
+check_provides() {
+  local old="$1" old_adopted="$2" c n=0 a=0
   for c in $M_PROVIDES; do
+    n=$((n + 1))
+    if [ -n "$(adopted_path "$c")" ]; then a=$((a + 1)); continue; fi
+    case " $old " in *" $c "*) continue ;; esac
     if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi
   done
+  ADOPTED=0
+  if [ "$n" -gt 0 ] && [ "$a" -eq "$n" ] && [ "$old_adopted" = 1 ]; then ADOPTED=1; fi
 }
 
 # Warn in the plan when an existing opencode.json (copied once, never updated) lacks the rule that
@@ -302,8 +365,14 @@ print_plan() {
       if [ -f "$f" ]; then echo "OPENCODE_AUTO_ALLOW skills/$n/scripts/$(basename "$f")"; fi
     done
   done
-  if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
-  if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+  if [ "$ADOPTED" = 1 ]; then
+    for n in $M_PROVIDES; do echo "ADOPT $n $(adopted_path "$n")"; done
+    if [ -n "$M_INSTALL" ]; then echo "INSTALL_SKIPPED $M_INSTALL"; fi
+    if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL_SKIPPED $M_UNINSTALL"; fi
+  else
+    if [ -n "$M_INSTALL" ]; then echo "INSTALL $M_INSTALL"; fi
+    if [ -n "$M_UNINSTALL" ]; then echo "UNINSTALL $M_UNINSTALL"; fi
+  fi
   check_opencode_gate
   print_dropped
 }
@@ -324,7 +393,7 @@ write_state() {
   file="$(state_file "$1")"
   tmp="$file.tmp"
   {
-    printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\n' "$2" "$3" "$4" "$5"
+    printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\nadopted=%s\n' "$2" "$3" "$4" "$5" "$ADOPTED"
     printf 'version=%s\nskills=%s\nagents=%s\nprovides=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_PROVIDES" "$M_UNINSTALL"
     claude_rules | awk 'NF { print "allow.claude=" $0 }'
     printf '%s' "$M_ALLOW_OPENCODE" | awk 'NF { print "allow.opencode=" $0 }'
@@ -422,9 +491,11 @@ run_cmd() {
   (cd "$1" && unset ARNESS_ROOT GIT_ALLOW_PROTOCOL GIT_TERMINAL_PROMPT && bash -c "$2") >&2
 }
 
+# run_install <name> <dir>: run install unless every provided command is adopted, then check that
+# each provided command is on the PATH.
 run_install() {
   local name="$1" dir="$2" c
-  if [ -n "$M_INSTALL" ] && ! run_cmd "$dir" "$M_INSTALL"; then
+  if [ "$ADOPTED" != 1 ] && [ -n "$M_INSTALL" ] && ! run_cmd "$dir" "$M_INSTALL"; then
     set_status "$name" install-failed
     fail "$EXIT_INSTALL" "INSTALL_FAILED $name"
   fi
@@ -505,7 +576,7 @@ prepare_add() {
   validate_plugin "$ADD_DIR"
   check_requirements
   if [ -e "$PLUGINS/$M_NAME" ] || [ -L "$PLUGINS/$M_NAME" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
-  check_provides_free
+  check_provides "" 1
   check_conflicts "$M_NAME"
 }
 
@@ -589,15 +660,9 @@ prepare_update() {
   validate_plugin "$TMP_DIR/tree"
   [ "$M_NAME" = "$name" ] || fail "$EXIT_INVALID" "BAD_MANIFEST name changed from $name to $M_NAME"
   check_requirements
-  # Commands provided since the installed version must not exist yet, like on a first install.
-  local c old_provides
-  old_provides="$(state_value "$name" provides)"
-  for c in $M_PROVIDES; do
-    case " $old_provides " in
-      *" $c "*) ;;
-      *) if command -v "$c" >/dev/null 2>&1; then fail "$EXIT_INVALID" "BAD_MANIFEST provides: $c already exists on this machine"; fi ;;
-    esac
-  done
+  # Commands provided since the installed version must not exist yet, like on a first install. A state
+  # written before adopt existed has no adopted line: install ran, so it is ours.
+  check_provides "$(state_value "$name" provides)" "$(state_value "$name" adopted)"
   check_conflicts "$name"
 }
 
@@ -668,7 +733,9 @@ cmd_remove() {
   for n in $(state_value "$name" skills); do echo "SKILL $n"; done
   for n in $(state_value "$name" agents); do echo "AGENT $n"; done
   uninstall="$(state_value "$name" uninstall)"
-  if [ -n "$uninstall" ]; then echo "UNINSTALL $uninstall"; fi
+  if [ -n "$uninstall" ]; then
+    if [ "$(state_value "$name" adopted)" = 1 ]; then echo "UNINSTALL_SKIPPED $uninstall"; else echo "UNINSTALL $uninstall"; fi
+  fi
   print_dropped
   fail "$EXIT_CONFIRM" "CONFIRM_REMOVE $name"
 }
@@ -681,8 +748,9 @@ apply_remove() {
   why="$(dirty_reason "$dest" "$(state_value "$name" commit)")"
   if [ -n "$why" ] && [ "$ARG_FORCE" -eq 0 ]; then fail "$EXIT_DIRTY" "DIRTY $dest $why"; fi
   # From the state, not the clone: a manifest changed since apply must not choose what runs here.
+  # An adopted command was installed by someone else (this plugin in another arness): left in place.
   uninstall="$(state_value "$name" uninstall)"
-  if [ -n "$uninstall" ]; then
+  if [ -n "$uninstall" ] && [ "$(state_value "$name" adopted)" != 1 ]; then
     run_cmd "$dest" "$uninstall" || echo "warning: uninstall failed, removing anyway: $uninstall" >&2
   fi
   unlink_plugin "$name"

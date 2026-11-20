@@ -117,6 +117,119 @@ add_demo() { "$SCRIPT" apply add --commit "$(origin_head)" "$@" "$URL" >/dev/nul
   [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
 }
 
+# install_elsewhere: demo-tool already installed under a fake $HOME at .tools/demo/bin/demo-tool and
+# linked on the PATH, as uv tool install or this plugin from another arness leaves it.
+install_elsewhere() {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.tools/demo/bin"
+  printf '#!/bin/sh\necho elsewhere\n' > "$HOME/.tools/demo/bin/demo-tool"
+  chmod +x "$HOME/.tools/demo/bin/demo-tool"
+  ln -s "$HOME/.tools/demo/bin/demo-tool" "$TOOL"
+}
+
+@test "add adopts a provided command installed at its adopt path: install and uninstall are skipped" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ]
+  real="$(cd -P "$HOME/.tools/demo/bin" && pwd -P)/demo-tool"
+  [[ "$output" == *"ADOPT demo-tool $real"* ]] || false
+  [[ "$output" == *"INSTALL_SKIPPED $INSTALL_CMD"* ]] || false
+  [[ "$output" == *"UNINSTALL_SKIPPED $UNINSTALL_CMD"* ]] || false
+  ! printf '%s\n' "$output" | grep -q '^INSTALL ' || false
+  run "$SCRIPT" apply add --commit "$(origin_head)" "$URL"
+  [ "$status" -eq 0 ]
+  [ "$(last_line)" = "ADDED demo $SANDBOX/plugins/demo" ]
+  [ ! -e "$SANDBOX/plugins/demo/installed.flag" ]
+  [ "$("$TOOL")" = "elsewhere" ]
+  state | grep -qx 'adopted=1'
+}
+
+@test "a provided command at another path than its adopt line is still BAD_MANIFEST" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/other/bin/demo-tool'
+  commit_origin "adopt elsewhere"
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 4 ]
+  [ "$(last_line)" = "BAD_MANIFEST provides: demo-tool already exists on this machine" ]
+}
+
+@test "apply remove of an adopted plugin leaves the command and does not run uninstall" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  add_demo
+  run "$SCRIPT" remove demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"UNINSTALL_SKIPPED $UNINSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/uninstalled.flag" ]
+  [ "$("$TOOL")" = "elsewhere" ]
+}
+
+@test "update of an adopted plugin skips install while the command is there, and installs once it is gone" {
+  install_elsewhere
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  add_demo
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"INSTALL_SKIPPED $INSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo
+  [ "$status" -eq 0 ]
+  [ ! -e "$SANDBOX/plugins/demo/installed.flag" ]
+  state | grep -qx 'adopted=1'
+  rm "$TOOL"
+  edit_conf 's/^version=.*/version=0.3.0/'
+  commit_origin "c3"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"INSTALL $INSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo
+  [ "$status" -eq 0 ]
+  [ -f "$SANDBOX/plugins/demo/installed.flag" ]
+  state | grep -qx 'adopted=0'
+}
+
+@test "update of a plugin this arness installed runs install even if the command is at its adopt path" {
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  commit_origin "adopt"
+  add_demo
+  state | grep -qx 'adopted=0'
+  rm "$SANDBOX/plugins/demo/installed.flag" "$TOOL"
+  install_elsewhere
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  [[ "$output" == *"INSTALL $INSTALL_CMD"* ]] || false
+  run "$SCRIPT" apply update --commit "$(origin_head)" --ref main demo
+  [ "$status" -eq 0 ]
+  [ -f "$SANDBOX/plugins/demo/installed.flag" ]
+  state | grep -qx 'adopted=0'
+}
+
+@test "check rejects adopt lines that are malformed, repeated, absolute, with .. or not provided" {
+  for line in 'adopt=demo-tool' 'adopt=demo-tool /usr/bin/demo-tool' 'adopt=demo-tool a/../b' 'adopt=demo-tool a b'; do
+    write_conf "$line"
+    run "$SCRIPT" check "$ORIGIN"
+    [ "$status" -eq 4 ] && [[ "$output" == "BAD_MANIFEST adopt: "* ]] || { echo "accepted: $line"; false; }
+  done
+  write_conf 'adopt=rm bin/rm'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: rm is not in provides" ] || false
+  write_conf 'adopt=demo-tool a/demo-tool' 'adopt=demo-tool b/demo-tool'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 4 ] && [ "$output" = "BAD_MANIFEST adopt: duplicate command demo-tool" ] || false
+  write_conf 'adopt=demo-tool .tools/demo/bin/demo-tool'
+  run "$SCRIPT" check "$ORIGIN"
+  [ "$status" -eq 0 ]
+}
+
 @test "an install that does not provide its commands is INSTALL_FAILED" {
   edit_conf 's/^install=.*/install=touch installed.flag/'
   commit_origin "no tool"
