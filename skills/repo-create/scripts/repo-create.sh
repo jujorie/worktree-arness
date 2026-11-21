@@ -42,8 +42,9 @@
 #                                  could not be looked up after creating it, or git remote add failed (exit 17)
 #   NO_LOCAL <path>                --publish: source/<name> is missing or is not the top of a git repo (exit 18)
 #   HAS_REMOTE <path> <url>        --publish: the local repo already has an origin; nothing done (exit 19)
-#   NO_IDENTITY                    apply --local: git has no user.name or user.email for the new repo;
-#                                  the folder is removed again (exit 5)
+#   NO_IDENTITY                    apply --local: git has no explicit name and email for the author and
+#                                  the committer (config or GIT_* variables, never guessed); the folder is
+#                                  removed again (exit 5)
 #   NO_AUTH                        gh is missing or not logged in to github.com (exit 4)
 # Exit codes: 0 ok, 2 invalid usage/input, 3 GitHub, network or git error, 4 no gh auth, 5 no git identity,
 #             10 exists, 12 remote exists, 13 no owner, 14 created but not cloned, 15 create failed but exists,
@@ -249,35 +250,32 @@ remove_partial_local() {
   if [ -n "$LOCAL_DEST" ] && [ -d "$LOCAL_DEST" ] && [ ! -L "$LOCAL_DEST" ]; then rm -rf "$LOCAL_DEST"; fi
 }
 
-# First non-empty value of git config <key> in <dir>, or nothing. Args: dir key
-config_value() { git -C "$1" config "$2" 2>/dev/null || true; }
+# The identity question goes to git itself, never a copy of its rules: the initial commit runs with
+# user.useConfigOnly, so git takes the author and the committer only from explicit sources (GIT_* variables,
+# author.*, committer.*, user.*) and never guesses one from the host name or EMAIL.
+IDENTITY_ONLY=(-c user.useConfigOnly=true)
 
-# git identity for commits in <dir>: true when the author and the committer each have a name and an email
-# from an explicit source, in git's order (git-commit-tree): GIT_<SIDE>_NAME/EMAIL, <side>.name/email,
-# user.name/email, and EMAIL for the email. Never what git would guess from the host name. Checked per side:
-# git's user.useConfigOnly does not, so author.email alone would let the committer go out with no email.
-has_identity() {
-  local dir="$1" side name email config_only
-  config_only="$(git -C "$dir" config --bool user.useConfigOnly 2>/dev/null || true)"
-  for side in author committer; do
-    # A variable that is set but empty is not a fallback to the config: git refuses an empty ident.
-    if [ "$side" = "author" ]; then
-      if [ -n "${GIT_AUTHOR_NAME+x}" ] && [ -z "$GIT_AUTHOR_NAME" ]; then return 1; fi
-      if [ -n "${GIT_AUTHOR_EMAIL+x}" ] && [ -z "$GIT_AUTHOR_EMAIL" ]; then return 1; fi
-      name="${GIT_AUTHOR_NAME:-}" email="${GIT_AUTHOR_EMAIL:-}"
-    else
-      if [ -n "${GIT_COMMITTER_NAME+x}" ] && [ -z "$GIT_COMMITTER_NAME" ]; then return 1; fi
-      if [ -n "${GIT_COMMITTER_EMAIL+x}" ] && [ -z "$GIT_COMMITTER_EMAIL" ]; then return 1; fi
-      name="${GIT_COMMITTER_NAME:-}" email="${GIT_COMMITTER_EMAIL:-}"
-    fi
-    if [ -z "$name" ]; then name="$(config_value "$dir" "$side.name")"; fi
-    if [ -z "$name" ]; then name="$(config_value "$dir" user.name)"; fi
-    if [ -z "$email" ]; then email="$(config_value "$dir" "$side.email")"; fi
-    if [ -z "$email" ]; then email="$(config_value "$dir" user.email)"; fi
-    # With user.useConfigOnly git takes the email only from the config, not from EMAIL.
-    if [ -z "$email" ] && [ "$config_only" != "true" ]; then email="${EMAIL:-}"; fi
-    if [ -z "$name" ] || [ -z "$email" ]; then return 1; fi
-  done
+# True when git can build both idents in <dir> without guessing. Tells NO_IDENTITY from other failures.
+identity_known() {
+  git -C "$1" "${IDENTITY_ONLY[@]}" var GIT_AUTHOR_IDENT >/dev/null 2>&1 \
+    && git -C "$1" "${IDENTITY_ONLY[@]}" var GIT_COMMITTER_IDENT >/dev/null 2>&1
+}
+
+# True when the last commit in <dir> has a name and an email on both sides: git still commits with an empty
+# committer email when only author.email is set. git strips < and > from idents, so <> is an empty field.
+commit_identity_complete() {
+  local idents
+  idents="$(git -C "$1" log -1 --format='<%an><%ae><%cn><%ce>' 2>/dev/null)" || return 1
+  case "$idents" in
+    *"<>"*) return 1 ;;
+  esac
+}
+
+no_identity() {
+  echo "error: git has no explicit name and email for the author and the committer in $1;" \
+    "set user.name and user.email and run apply again" >&2
+  echo "NO_IDENTITY"
+  exit "$EXIT_NO_IDENTITY"
 }
 
 create_local() {
@@ -299,12 +297,6 @@ create_local() {
     echo "error: git init failed in $dest" >&2
     exit "$EXIT_GITHUB"
   fi
-  # The identity can come from a conditional include that only applies inside the new repo: ask there.
-  if ! has_identity "$dest"; then
-    echo "error: git user.name or user.email is not set for $dest; set them and run apply again" >&2
-    echo "NO_IDENTITY"
-    exit "$EXIT_NO_IDENTITY"
-  fi
   commit_args=(commit -q --no-verify -m "chore: initial commit")
   if [ "$readme" -eq 1 ]; then
     if [ -n "$description" ]; then
@@ -316,10 +308,13 @@ create_local() {
   else
     commit_args+=(--allow-empty)
   fi
-  if ! git -C "$dest" "${commit_args[@]}" >&2; then
+  # Run inside the new repo: the identity can come from a conditional include that only applies there.
+  if ! git -C "$dest" "${IDENTITY_ONLY[@]}" "${commit_args[@]}" >&2; then
+    if ! identity_known "$dest"; then no_identity "$dest"; fi
     echo "error: the initial commit failed in $dest" >&2
     exit "$EXIT_GITHUB"
   fi
+  if ! commit_identity_complete "$dest"; then no_identity "$dest"; fi
   LOCAL_DEST=""
   trap - EXIT
   echo "CREATED_LOCAL $name $dest"

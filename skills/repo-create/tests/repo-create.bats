@@ -360,17 +360,18 @@ teardown() { rm -rf "$TMP"; }
   [ ! -e "$SRC/my-repo" ]
 }
 
-@test "an email in EMAIL is accepted, as git does" {
+@test "EMAIL alone is not an explicit identity: NO_IDENTITY" {
   printf '[user]\n\tname = Test\n' > "$TMP/gitconfig"
   EMAIL=e@example.com run "$SCRIPT" apply --local my-repo
-  [ "$status" -eq 0 ]
-  [ "$(git -C "$SRC/my-repo" log -1 --format='%ae %ce')" = "e@example.com e@example.com" ]
+  [ "$status" -eq 5 ]
+  [ ! -e "$SRC/my-repo" ]
 }
 
-@test "EMAIL is ignored under user.useConfigOnly, as git does" {
-  printf '[user]\n\tname = Test\n\tuseConfigOnly = true\n' > "$TMP/gitconfig"
+@test "NO_IDENTITY when author.email is set and EMAIL would only fill the committer" {
+  printf '[user]\n\tname = Test\n[author]\n\temail = a@example.com\n' > "$TMP/gitconfig"
   EMAIL=e@example.com run "$SCRIPT" apply --local my-repo
   [ "$status" -eq 5 ]
+  [ "${lines[${#lines[@]}-1]}" = "NO_IDENTITY" ]
   [ ! -e "$SRC/my-repo" ]
 }
 
