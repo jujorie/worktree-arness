@@ -53,6 +53,7 @@
 #   SELECT <skills|agents> <a,b|->        the default selection apply takes without --skills / --agents
 #   RESTORE <path> <local|plugin:<name>>  remove, update: what the plugin replaced and apply puts back (on
 #                                         update, unless it is selected again)
+#   RESTORE_IF_UNSELECTED <path> <how>    update: selected by default; apply puts it back if left out
 #   RESTORED <path>                       apply: put back what the plugin had replaced
 #   RESTORE_SKIPPED <path> <taken|missing> <backup|plugin:<name>>   apply: could not put it back; a
 #                                         backup stays where shown, and update keeps it recorded (taken)
@@ -731,8 +732,9 @@ restore_replaced() {
     [ -n "$line" ] || continue
     rel="${line%% *}" c="${line#* }"
     # shellcheck disable=SC2046
-    set -- $(item_kind_name "$rel")
+    set -- $(item_kind_name "$rel") "" ""
     kind="$1" n="$2"
+    if [ -z "$n" ] || ! is_slug "$n"; then echo "RESTORE_SKIPPED $rel missing invalid"; continue; fi
     if { [ "$kind" = skills ] && in_list "$n" "$SEL_SKILLS"; } || { [ "$kind" = agents ] && in_list "$n" "$SEL_AGENTS"; }; then
       STATE_REPLACED="$STATE_REPLACED$line"$'\n'
       continue
@@ -749,7 +751,10 @@ restore_replaced() {
         mv "$PLUGINS/.replaced/$name/$rel" "$ROOT/$rel" ;;
       plugin:*)
         if [ "$kind" = skills ]; then src="../plugins/${c#plugin:}/skills/$n"; else src="../plugins/${c#plugin:}/agents/$n.md"; fi
-        if [ ! -f "$(state_file "${c#plugin:}")" ] || [ ! -e "$ROOT/$kind/$src" ]; then
+        # Only what that plugin's state lists as left out: a version that no longer declares it was
+        # validated without it, so it gets neither the link nor the Skill rule back.
+        if [ ! -f "$(state_file "${c#plugin:}")" ] || [ ! -e "$ROOT/$kind/$src" ] \
+          || ! in_list "$n" "$(state_value "${c#plugin:}" "skipped.$kind")"; then
           echo "RESTORE_SKIPPED $rel missing $c"; continue
         fi
         state_move "${c#plugin:}" "$kind" "$n" in
@@ -1131,18 +1136,20 @@ parse_name_args() {
   case "$ARG_ADOPTED" in ""|0|1) ;; *) die "invalid --adopted (0 or 1): $ARG_ADOPTED" ;; esac
 }
 
-# print_update_restores <plugin>: RESTORE for each replacement whose item the default selection leaves
-# out (no longer declared, or taken): apply puts it back unless it is selected.
+# print_update_restores <plugin>: for each replacement, RESTORE when the default selection leaves its
+# item out (no longer declared, or taken), else RESTORE_IF_UNSELECTED: apply puts back whatever the
+# selection it is given leaves out.
 print_update_restores() {
   local name="$1" line rel kind n dsel
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     rel="${line%% *}"
     # shellcheck disable=SC2046
-    set -- $(item_kind_name "$rel")
+    set -- $(item_kind_name "$rel") "" ""
     kind="$1" n="$2"
+    [ -n "$n" ] || continue
     dsel="$(default_selection "$(classify_items "$kind" "$name" 1)")"
-    in_list "$n" "$dsel" || echo "RESTORE $line"
+    if in_list "$n" "$dsel"; then echo "RESTORE_IF_UNSELECTED $line"; else echo "RESTORE $line"; fi
   done <<< "$(conf_value "$(state_file "$name")" replaced)"
 }
 

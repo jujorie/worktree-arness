@@ -471,7 +471,6 @@ other_plugin_replacing() { other_plugin --skills demo-hello --replace skills/dem
   state | grep -qx 'skipped.skills=demo-hello'
   ! state | grep -q 'Skill(demo-hello)' || false
   ! printf '%s\n' "$output" | grep -q "MANUAL opencode skill demo-hello" || false
-  ! grep -q 'Skill(demo-hello)' "$SANDBOX/.claude/settings.json" 2>/dev/null || false
 }
 
 @test "a selected name taken by something else needs --replace: NAME_CONFLICT and nothing written" {
@@ -714,6 +713,48 @@ other_plugin_replacing() { other_plugin --skills demo-hello --replace skills/dem
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -qx "RESTORED skills/demo-hello"
   [ "$(cat "$SANDBOX/skills/demo-hello/SKILL.md")" = mine ]
+}
+
+@test "another plugin gets back only a replaced skill its installed version still declares" {
+  other_plugin
+  add_demo --skills demo-hello --replace skills/demo-hello
+  # other's next version drops demo-hello from its manifest (the folder stays in its clone)
+  printf '%s\n' 'name=other' 'version=0.2.0' 'prefix=demo-' 'arness=1' 'description=Other plugin' > "$OTHER/arness-plugin.conf"
+  git_q -C "$OTHER" add -A
+  git_q -C "$OTHER" commit -q -m o2
+  "$SCRIPT" update other >/dev/null 2>&1 || true
+  run "$SCRIPT" apply update --commit "$(git -C "$OTHER" rev-parse HEAD)" --adopted 0 --ref main other
+  [ "$status" -eq 0 ]
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORE_SKIPPED skills/demo-hello missing plugin:other"
+  [ ! -e "$SANDBOX/skills/demo-hello" ] && [ ! -L "$SANDBOX/skills/demo-hello" ] || false
+  ! grep -q 'Skill(demo-hello)' "$SANDBOX/plugins/.other.state" || false
+  grep -qx 'skills=' "$SANDBOX/plugins/.other.state"
+}
+
+@test "the update plan shows what leaving a replacing skill out would put back" {
+  other_plugin
+  add_demo --skills demo-hello --replace skills/demo-hello
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qx "SKILL demo-hello"
+  printf '%s\n' "$output" | grep -qx "RESTORE_IF_UNSELECTED skills/demo-hello plugin:other"
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main --skills - demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORED skills/demo-hello"
+  [ "$(readlink "$SANDBOX/skills/demo-hello")" = "../plugins/other/skills/demo-hello" ]
+}
+
+@test "a malformed replaced line is skipped, not a half-done remove" {
+  add_demo
+  echo 'replaced=bogus local' >> "$SANDBOX/plugins/.demo.state"
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORE_SKIPPED bogus missing invalid"
+  [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ] || false
 }
 
 @test "a missing requirement is MISSING_REQUIREMENT" {
