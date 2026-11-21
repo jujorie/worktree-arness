@@ -30,7 +30,7 @@ All the work is done by `scripts/repo-create.sh` (in this skill's folder), run f
 2. Get from the user:
    - **name**: `<owner>/<name>` for GitHub and `--publish`; only `<name>` for `--local`. If the owner is missing in a mode that needs it, ask; do not guess it. For `--publish`, `<name>` is the folder in `source/` and the repo name on GitHub.
    - **visibility** (GitHub and `--publish`): private (default), `--public` or `--internal` (organizations only). Never make it public unless the user says so.
-   - optional **description** (`--description "<text>"`). With `--local` it goes into the README.
+   - optional **description** (`--description "<text>"`). With `--local` it goes into the README, so it cannot go with `--no-readme`.
    - A README is added by default (GitHub and `--local`), so the repo has a `main` branch to base worktrees on. `--no-readme` only if the user wants no README: with `--local` the initial commit is then empty (`main` still exists); on GitHub the repo is empty and `worktree-create` has no base branch until something is pushed. `--publish` takes no `--no-readme`.
    - `--protocol ssh|https` (GitHub and `--publish`) only if the user asks; the default is gh's `git_protocol` for github.com.
 3. Run the plan:
@@ -42,7 +42,7 @@ All the work is done by `scripts/repo-create.sh` (in this skill's folder), run f
 | Output | Exit | What to do |
 |---|---|---|
 | plan lines (`REPO`, `MODE`, `VISIBILITY`, `DESCRIPTION`, `README`, `PROTOCOL`, `BRANCH`, `DEST`, whichever the mode prints), then `CONFIRM_CREATE <repo>` or `CONFIRM_PUBLISH <owner>/<name>` | 20 | Nothing was written. Show the plan (repo, mode, visibility, description, README, clone protocol, branch, folder) and ask for confirmation. For `--publish` say which branch will be pushed and that it becomes the default branch on GitHub. On an explicit yes, go to step 5 with the **same** options. |
-| `EXISTS <path>` | 10 | GitHub or `--local`: `source/<name>` already exists; nothing was created. Tell the user. The repo cannot be put there under another name by this skill: ask whether to pick another repo name, or free that folder first. If it is a local repo the user wants on GitHub, that is `--publish`. |
+| `EXISTS <path>` | 10 | GitHub or `--local` (also from `apply --local` if the folder appeared after the check): `source/<name>` already exists; nothing was created. Tell the user. The repo cannot be put there under another name by this skill: ask whether to pick another repo name, or free that folder first. If it is a local repo the user wants on GitHub, that is `--publish`. |
 | `REMOTE_EXISTS <owner>/<name> <url>` | 12 | The repo already exists on GitHub; nothing was created. GitHub mode: offer to clone it with the `repo-clone` skill (URL from the output). `--publish`: tell the user and ask for another name; never link or push to an existing repo. |
 | `NO_OWNER <owner>` | 13 | No such user or organization. Show it and ask for the right owner. |
 | `NO_LOCAL <path>` | 18 | `--publish`: `source/<name>` does not exist or is not the top of a git repo (reason on stderr). Nothing was done. Offer `--local` to create it, or ask for the right name. |

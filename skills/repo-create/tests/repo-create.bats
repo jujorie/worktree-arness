@@ -337,6 +337,37 @@ teardown() { rm -rf "$TMP"; }
   [ ! -e "$SRC/my-repo" ]
 }
 
+@test "NO_IDENTITY when only the author is set in the environment" {
+  : > "$TMP/gitconfig"
+  GIT_AUTHOR_NAME=a GIT_AUTHOR_EMAIL=a@example.com run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 5 ]
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "a failed initial commit is exit 3 and removes the new folder" {
+  printf '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n' >> "$TMP/gitconfig"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"initial commit failed"* ]] || false
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "a failed git init is exit 3 and removes the new folder" {
+  real_git="$(command -v git)"
+  printf '#!/usr/bin/env bash\n[ "$1" != init ] || exit 1\nexec "%s" "$@"\n' "$real_git" > "$TMP/bin/git"
+  chmod +x "$TMP/bin/git"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"git init failed"* ]] || false
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "--local rejects --description with --no-readme" {
+  run "$SCRIPT" plan --local --no-readme --description x my-repo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only goes into the README"* ]] || false
+}
+
 @test "--local rejects an owner, a visibility, --protocol and --publish" {
   run "$SCRIPT" plan --local my-org/my-repo
   [ "$status" -eq 2 ]
@@ -401,6 +432,11 @@ teardown() { rm -rf "$TMP"; }
   run "$SCRIPT" plan --publish my-org/my-repo
   [ "$status" -eq 18 ]
   [[ "$output" == *"not the top folder of a git repository"* ]] || false
+  rm -rf "$SRC/my-repo"
+  echo x > "$SRC/my-repo"
+  run "$SCRIPT" plan --publish my-org/my-repo
+  [ "$status" -eq 18 ]
+  [[ "$output" == *"is not a folder"* ]] || false
   [ ! -s "$GH_LOG" ]
 }
 

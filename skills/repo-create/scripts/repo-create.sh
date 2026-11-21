@@ -14,7 +14,8 @@
 # Options: --private (default) | --public | --internal, --description TEXT, --no-readme,
 #          --protocol ssh|https (default: gh's git_protocol for github.com, else https)
 # --local takes a <name>, not <owner>/<name>, and no visibility or --protocol: nothing goes to GitHub. Its
-# README holds the description; with --no-readme the initial commit is empty, so main always exists.
+# README holds the description; with --no-readme (and then no --description) the initial commit is empty,
+# so main always exists.
 # --publish takes no --no-readme: the GitHub repo is created empty and gets the local history.
 #
 # plan checks everything and writes nothing; apply does the work.
@@ -154,7 +155,11 @@ check_local_repo() {
   local dest="$1" top real url
   if [ -L "$dest" ]; then die "$dest is a symlink, refusing to touch it"; fi
   if [ ! -d "$dest" ]; then
-    echo "error: $dest does not exist; create it first with --local" >&2
+    if [ -e "$dest" ]; then
+      echo "error: $dest is not a folder" >&2
+    else
+      echo "error: $dest does not exist; create it first with --local" >&2
+    fi
     echo "NO_LOCAL $dest"
     exit "$EXIT_NO_LOCAL"
   fi
@@ -244,12 +249,14 @@ remove_partial_local() {
   if [ -n "$LOCAL_DEST" ] && [ -d "$LOCAL_DEST" ] && [ ! -L "$LOCAL_DEST" ]; then rm -rf "$LOCAL_DEST"; fi
 }
 
-# git identity for commits in <dir>: true when both a name and an email are set (env or config).
+# git identity for commits in <dir>: true when the author and the committer both have a name and an
+# email (env or config). Explicit on purpose: git would otherwise guess one from the host name.
 has_identity() {
   local dir="$1" name email
-  name="${GIT_AUTHOR_NAME:-$(git -C "$dir" config user.name 2>/dev/null || true)}"
-  email="${GIT_AUTHOR_EMAIL:-$(git -C "$dir" config user.email 2>/dev/null || true)}"
-  [ -n "$name" ] && [ -n "$email" ]
+  name="$(git -C "$dir" config user.name 2>/dev/null || true)"
+  email="$(git -C "$dir" config user.email 2>/dev/null || true)"
+  [ -n "${GIT_AUTHOR_NAME:-$name}" ] && [ -n "${GIT_AUTHOR_EMAIL:-$email}" ] \
+    && [ -n "${GIT_COMMITTER_NAME:-$name}" ] && [ -n "${GIT_COMMITTER_EMAIL:-$email}" ]
 }
 
 create_local() {
@@ -257,7 +264,12 @@ create_local() {
   local -a commit_args
 
   mkdir -p "$(dirname "$dest")"
-  if ! mkdir "$dest"; then echo "error: could not create $dest" >&2; exit "$EXIT_GITHUB"; fi
+  if ! mkdir "$dest"; then
+    # Made by someone else since the check: leave it alone.
+    if [ -e "$dest" ] || [ -L "$dest" ]; then echo "EXISTS $dest"; exit "$EXIT_EXISTS"; fi
+    echo "error: could not create $dest" >&2
+    exit "$EXIT_GITHUB"
+  fi
   LOCAL_DEST="$dest"
   trap remove_partial_local EXIT
 
@@ -345,6 +357,9 @@ main() {
     case "$repo" in */*) die "--local takes a <name>, not <owner>/<name>: nothing goes to GitHub" ;; esac
     [ "$visibility_set" -eq 0 ] || die "--local takes no visibility: nothing goes to GitHub"
     [ -z "$PROTOCOL" ] || die "--local takes no --protocol: nothing goes to GitHub"
+    if [ "$readme" -eq 0 ] && [ -n "$description" ]; then
+      die "--local --no-readme takes no --description: it only goes into the README"
+    fi
     name="$repo"
   else
     [ -n "$repo" ] || die "missing repository: <owner>/<name>"
