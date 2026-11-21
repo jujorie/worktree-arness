@@ -72,7 +72,7 @@ setup() {
   # git identity for the commits of --local, isolated from the machine's config.
   printf '[user]\n\tname = Test\n\temail = test@example.com\n' > "$TMP/gitconfig"
   export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1
-  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL EMAIL
 }
 
 # A local repo in source/<name> as apply --local leaves it.
@@ -342,6 +342,68 @@ teardown() { rm -rf "$TMP"; }
   GIT_AUTHOR_NAME=a GIT_AUTHOR_EMAIL=a@example.com run "$SCRIPT" apply --local my-repo
   [ "$status" -eq 5 ]
   [ ! -e "$SRC/my-repo" ]
+}
+
+@test "an identity split into user.name and author/committer emails is accepted" {
+  printf '[user]\n\tname = Test\n[author]\n\temail = a@example.com\n[committer]\n\temail = c@example.com\n' \
+    > "$TMP/gitconfig"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED_LOCAL my-repo $SRC/my-repo" ]
+  [ "$(git -C "$SRC/my-repo" log -1 --format='%ae %ce')" = "a@example.com c@example.com" ]
+}
+
+@test "NO_IDENTITY when only author.email is set: the committer would have no email" {
+  printf '[user]\n\tname = Test\n[author]\n\temail = a@example.com\n' > "$TMP/gitconfig"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 5 ]
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "an email in EMAIL is accepted, as git does" {
+  printf '[user]\n\tname = Test\n' > "$TMP/gitconfig"
+  EMAIL=e@example.com run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SRC/my-repo" log -1 --format='%ae %ce')" = "e@example.com e@example.com" ]
+}
+
+@test "EMAIL is ignored under user.useConfigOnly, as git does" {
+  printf '[user]\n\tname = Test\n\tuseConfigOnly = true\n' > "$TMP/gitconfig"
+  EMAIL=e@example.com run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 5 ]
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "a GIT_AUTHOR_NAME set but empty is NO_IDENTITY, not a fallback to user.name" {
+  GIT_AUTHOR_NAME="" run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 5 ]
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "names from author.name and committer.name are accepted" {
+  printf '[author]\n\tname = A\n\temail = a@example.com\n[committer]\n\tname = C\n\temail = c@example.com\n' \
+    > "$TMP/gitconfig"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SRC/my-repo" log -1 --format='%an %cn')" = "A C" ]
+}
+
+@test "an identity only in GIT_AUTHOR_* and GIT_COMMITTER_* is accepted" {
+  : > "$TMP/gitconfig"
+  GIT_AUTHOR_NAME=a GIT_AUTHOR_EMAIL=a@example.com GIT_COMMITTER_NAME=c GIT_COMMITTER_EMAIL=c@example.com \
+    run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 0 ]
+}
+
+@test "a failed git remote add in --publish is NOT_LINKED" {
+  make_local_repo my-repo
+  real_git="$(command -v git)"
+  printf '#!/usr/bin/env bash\n[ "$3 $4" != "remote add" ] || exit 1\nexec "%s" "$@"\n' "$real_git" > "$TMP/bin/git"
+  chmod +x "$TMP/bin/git"
+  run "$SCRIPT" apply --publish --protocol ssh my-org/my-repo
+  [ "$status" -eq 17 ]
+  [ "${lines[${#lines[@]}-1]}" = "NOT_LINKED my-org/my-repo file://$REMOTES/my-org/my-repo.git" ]
+  [ -z "$("$real_git" -C "$SRC/my-repo" remote)" ]
 }
 
 @test "a failed initial commit is exit 3 and removes the new folder" {

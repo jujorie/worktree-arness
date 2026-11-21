@@ -249,14 +249,35 @@ remove_partial_local() {
   if [ -n "$LOCAL_DEST" ] && [ -d "$LOCAL_DEST" ] && [ ! -L "$LOCAL_DEST" ]; then rm -rf "$LOCAL_DEST"; fi
 }
 
-# git identity for commits in <dir>: true when the author and the committer both have a name and an
-# email (env or config). Explicit on purpose: git would otherwise guess one from the host name.
+# First non-empty value of git config <key> in <dir>, or nothing. Args: dir key
+config_value() { git -C "$1" config "$2" 2>/dev/null || true; }
+
+# git identity for commits in <dir>: true when the author and the committer each have a name and an email
+# from an explicit source, in git's order (git-commit-tree): GIT_<SIDE>_NAME/EMAIL, <side>.name/email,
+# user.name/email, and EMAIL for the email. Never what git would guess from the host name. Checked per side:
+# git's user.useConfigOnly does not, so author.email alone would let the committer go out with no email.
 has_identity() {
-  local dir="$1" name email
-  name="$(git -C "$dir" config user.name 2>/dev/null || true)"
-  email="$(git -C "$dir" config user.email 2>/dev/null || true)"
-  [ -n "${GIT_AUTHOR_NAME:-$name}" ] && [ -n "${GIT_AUTHOR_EMAIL:-$email}" ] \
-    && [ -n "${GIT_COMMITTER_NAME:-$name}" ] && [ -n "${GIT_COMMITTER_EMAIL:-$email}" ]
+  local dir="$1" side name email config_only
+  config_only="$(git -C "$dir" config --bool user.useConfigOnly 2>/dev/null || true)"
+  for side in author committer; do
+    # A variable that is set but empty is not a fallback to the config: git refuses an empty ident.
+    if [ "$side" = "author" ]; then
+      if [ -n "${GIT_AUTHOR_NAME+x}" ] && [ -z "$GIT_AUTHOR_NAME" ]; then return 1; fi
+      if [ -n "${GIT_AUTHOR_EMAIL+x}" ] && [ -z "$GIT_AUTHOR_EMAIL" ]; then return 1; fi
+      name="${GIT_AUTHOR_NAME:-}" email="${GIT_AUTHOR_EMAIL:-}"
+    else
+      if [ -n "${GIT_COMMITTER_NAME+x}" ] && [ -z "$GIT_COMMITTER_NAME" ]; then return 1; fi
+      if [ -n "${GIT_COMMITTER_EMAIL+x}" ] && [ -z "$GIT_COMMITTER_EMAIL" ]; then return 1; fi
+      name="${GIT_COMMITTER_NAME:-}" email="${GIT_COMMITTER_EMAIL:-}"
+    fi
+    if [ -z "$name" ]; then name="$(config_value "$dir" "$side.name")"; fi
+    if [ -z "$name" ]; then name="$(config_value "$dir" user.name)"; fi
+    if [ -z "$email" ]; then email="$(config_value "$dir" "$side.email")"; fi
+    if [ -z "$email" ]; then email="$(config_value "$dir" user.email)"; fi
+    # With user.useConfigOnly git takes the email only from the config, not from EMAIL.
+    if [ -z "$email" ] && [ "$config_only" != "true" ]; then email="${EMAIL:-}"; fi
+    if [ -z "$name" ] || [ -z "$email" ]; then return 1; fi
+  done
 }
 
 create_local() {
