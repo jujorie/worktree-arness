@@ -69,6 +69,16 @@ setup() {
   write_gh_stub
   export PATH="$TMP/bin:$PATH"
   SRC="$ARNESS_ROOT/source"
+  # git identity for the commits of --local, isolated from the machine's config.
+  printf '[user]\n\tname = Test\n\temail = test@example.com\n' > "$TMP/gitconfig"
+  export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1
+  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+}
+
+# A local repo in source/<name> as apply --local leaves it.
+make_local_repo() {
+  run "$SCRIPT" apply --local "$1"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
 teardown() { rm -rf "$TMP"; }
@@ -256,6 +266,207 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -eq 2 ]
   [[ "$output" == *"symlink"* ]] || false
   ! grep -q '^repo create' "$GH_LOG" || false
+}
+
+# --- --local -------------------------------------------------------------
+
+@test "plan --local prints the plan and CONFIRM_CREATE without calling gh or writing" {
+  run "$SCRIPT" plan --local --description "My service" my-repo
+  [ "$status" -eq 20 ]
+  [ "${lines[0]}" = "REPO my-repo" ]
+  [ "${lines[1]}" = "MODE local" ]
+  [ "${lines[2]}" = "DESCRIPTION My service" ]
+  [ "${lines[3]}" = "README yes" ]
+  [ "${lines[4]}" = "BRANCH main" ]
+  [ "${lines[5]}" = "DEST $SRC/my-repo" ]
+  [ "${lines[6]}" = "CONFIRM_CREATE my-repo" ]
+  [ ! -e "$SRC" ]
+  [ ! -s "$GH_LOG" ]
+}
+
+@test "apply --local makes a repo on main with a README commit, no remote and no gh call" {
+  run "$SCRIPT" apply --local --description "My service" my-repo
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED_LOCAL my-repo $SRC/my-repo" ]
+  [ "$(git -C "$SRC/my-repo" symbolic-ref --short HEAD)" = "main" ]
+  [ "$(git -C "$SRC/my-repo" rev-list --count main)" -eq 1 ]
+  [ "$(cat "$SRC/my-repo/README.md")" = "$(printf '# my-repo\n\nMy service')" ]
+  [ -z "$(git -C "$SRC/my-repo" remote)" ]
+  [ -z "$(git -C "$SRC/my-repo" status --porcelain)" ]
+  [ ! -s "$GH_LOG" ]
+}
+
+@test "apply --local --no-readme still leaves main with an empty initial commit" {
+  run "$SCRIPT" apply --local --no-readme my-repo
+  [ "$status" -eq 0 ]
+  [ ! -e "$SRC/my-repo/README.md" ]
+  [ "$(git -C "$SRC/my-repo" rev-list --count main)" -eq 1 ]
+}
+
+@test "apply --local works without gh" {
+  rm "$TMP/bin/gh"
+  PATH="$TMP/bin:/usr/bin:/bin" run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 0 ]
+  [ -d "$SRC/my-repo/.git" ]
+}
+
+@test "a repo made with --local is ready for worktree-create" {
+  make_local_repo my-repo
+  run "$SKILL_DIR/../worktree-create/scripts/worktree-create.sh" --source my-repo --name feat/PROJ-1 \
+    --branch main --no-config --no-fetch
+  [ "$status" -eq 0 ]
+  [ "$output" = "CREATED $ARNESS_ROOT/worktrees/my-repo/feat/PROJ-1 main" ]
+  [ "$(git -C "$ARNESS_ROOT/worktrees/my-repo/feat/PROJ-1" symbolic-ref --short HEAD)" = "feat/PROJ-1" ]
+}
+
+@test "--local stops at EXISTS and leaves the folder as it was" {
+  mkdir -p "$SRC/my-repo"
+  echo keep > "$SRC/my-repo/file"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 10 ]
+  [ "$output" = "EXISTS $SRC/my-repo" ]
+  [ "$(cat "$SRC/my-repo/file")" = "keep" ]
+  [ ! -e "$SRC/my-repo/.git" ]
+}
+
+@test "NO_IDENTITY when git has no user, and the new folder is removed" {
+  : > "$TMP/gitconfig"
+  run "$SCRIPT" apply --local my-repo
+  [ "$status" -eq 5 ]
+  [ "${lines[${#lines[@]}-1]}" = "NO_IDENTITY" ]
+  [ ! -e "$SRC/my-repo" ]
+}
+
+@test "--local rejects an owner, a visibility, --protocol and --publish" {
+  run "$SCRIPT" plan --local my-org/my-repo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"takes a <name>"* ]] || false
+  for opt in --public --private --internal "--protocol ssh" --publish; do
+    # shellcheck disable=SC2086 # word splitting of "--protocol ssh" is wanted
+    run "$SCRIPT" plan --local $opt my-repo
+    [ "$status" -eq 2 ] || { echo "accepted: $opt (status $status)"; return 1; }
+  done
+  for bad in "" "." ".." "-x" "x.git" "a b"; do
+    run "$SCRIPT" plan --local "$bad"
+    [ "$status" -eq 2 ] || { echo "accepted: '$bad' (status $status)"; return 1; }
+  done
+  [ ! -s "$GH_LOG" ]
+}
+
+# --- --publish -----------------------------------------------------------
+
+@test "plan --publish prints the plan and CONFIRM_PUBLISH and creates nothing" {
+  make_local_repo my-repo
+  run "$SCRIPT" plan --publish --description "My service" my-org/my-repo
+  [ "$status" -eq 20 ]
+  [ "${lines[0]}" = "REPO my-org/my-repo" ]
+  [ "${lines[1]}" = "MODE publish" ]
+  [ "${lines[2]}" = "VISIBILITY private" ]
+  [ "${lines[3]}" = "DESCRIPTION My service" ]
+  [ "${lines[4]}" = "PROTOCOL https" ]
+  [ "${lines[5]}" = "BRANCH main" ]
+  [ "${lines[6]}" = "DEST $SRC/my-repo" ]
+  [ "${lines[7]}" = "CONFIRM_PUBLISH my-org/my-repo" ]
+  [ ! -e "$REMOTES/my-org/my-repo.git" ]
+  [ -z "$(git -C "$SRC/my-repo" remote)" ]
+}
+
+@test "apply --publish creates an empty repo, sets origin and pushes the current branch with tracking" {
+  make_local_repo my-repo
+  run "$SCRIPT" apply --publish --protocol ssh --description "My service" my-org/my-repo
+  [ "$status" -eq 0 ]
+  [ "${lines[${#lines[@]}-1]}" = "PUBLISHED my-org/my-repo $SRC/my-repo main" ]
+  grep -qx 'repo create my-org/my-repo --private --description My service' "$GH_LOG" || false
+  [ "$(git -C "$SRC/my-repo" remote get-url origin)" = "file://$REMOTES/my-org/my-repo.git" ]
+  [ "$(git -C "$REMOTES/my-org/my-repo.git" rev-parse main)" = "$(git -C "$SRC/my-repo" rev-parse main)" ]
+  [ "$(git -C "$SRC/my-repo" rev-parse --abbrev-ref 'main@{upstream}')" = "origin/main" ]
+}
+
+@test "apply --publish pushes the branch checked out in source/<name>" {
+  make_local_repo my-repo
+  git -C "$SRC/my-repo" checkout -q -b develop
+  run "$SCRIPT" apply --publish my-org/my-repo
+  [ "$status" -eq 0 ]
+  [ "${lines[${#lines[@]}-1]}" = "PUBLISHED my-org/my-repo $SRC/my-repo develop" ]
+  git -C "$REMOTES/my-org/my-repo.git" rev-parse --verify --quiet develop
+  ! git -C "$REMOTES/my-org/my-repo.git" rev-parse --verify --quiet main || false
+}
+
+@test "NO_LOCAL when source/<name> is missing, not a repo, or only a folder inside another repo" {
+  run "$SCRIPT" plan --publish my-org/my-repo
+  [ "$status" -eq 18 ]
+  [ "${lines[${#lines[@]}-1]}" = "NO_LOCAL $SRC/my-repo" ]
+  git init -q "$ARNESS_ROOT"
+  mkdir -p "$SRC/my-repo"
+  run "$SCRIPT" plan --publish my-org/my-repo
+  [ "$status" -eq 18 ]
+  [[ "$output" == *"not the top folder of a git repository"* ]] || false
+  [ ! -s "$GH_LOG" ]
+}
+
+@test "HAS_REMOTE when the local repo already has an origin, before asking GitHub" {
+  make_local_repo my-repo
+  git -C "$SRC/my-repo" remote add origin https://example.com/x.git
+  run "$SCRIPT" apply --publish my-org/my-repo
+  [ "$status" -eq 19 ]
+  [ "$output" = "HAS_REMOTE $SRC/my-repo https://example.com/x.git" ]
+  [ ! -s "$GH_LOG" ]
+}
+
+@test "--publish refuses a detached HEAD and a branch with no commit" {
+  make_local_repo my-repo
+  git -C "$SRC/my-repo" checkout -q --detach
+  run "$SCRIPT" plan --publish my-org/my-repo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"detached HEAD"* ]] || false
+  git init -q "$SRC/empty"
+  run "$SCRIPT" plan --publish my-org/empty
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no commit"* ]] || false
+}
+
+@test "--publish stops at REMOTE_EXISTS, NO_OWNER and NO_AUTH without creating or linking" {
+  make_local_repo my-repo
+  git init -q --bare "$REMOTES/my-org/my-repo.git"
+  run "$SCRIPT" apply --publish my-org/my-repo
+  [ "$status" -eq 12 ]
+  run "$SCRIPT" apply --publish nobody/my-repo
+  [ "$status" -eq 13 ]
+  GH_AUTH_FAIL=1 run "$SCRIPT" apply --publish my-org/my-repo
+  [ "$status" -eq 4 ]
+  ! grep -q '^repo create' "$GH_LOG" || false
+  [ -z "$(git -C "$SRC/my-repo" remote)" ]
+}
+
+@test "NOT_PUSHED when the repo was created and linked but the push fails" {
+  make_local_repo my-repo
+  GH_BAD_CLONE_URL=1 run "$SCRIPT" apply --publish --protocol ssh my-org/my-repo
+  [ "$status" -eq 16 ]
+  [ "${lines[${#lines[@]}-1]}" = "NOT_PUSHED my-org/my-repo file://$REMOTES/my-org/my-repo.git-missing" ]
+  [ "$(git -C "$SRC/my-repo" remote get-url origin)" = "file://$REMOTES/my-org/my-repo.git-missing" ]
+}
+
+@test "NOT_LINKED when the repo was created but cannot be looked up, and origin stays unset" {
+  make_local_repo my-repo
+  GH_REPO_LOOKUP_FAIL=after-create run "$SCRIPT" apply --publish --protocol ssh my-org/my-repo
+  [ "$status" -eq 17 ]
+  [ "${lines[${#lines[@]}-1]}" = "NOT_LINKED my-org/my-repo git@github.com:my-org/my-repo.git" ]
+  [ -z "$(git -C "$SRC/my-repo" remote)" ]
+}
+
+@test "a gh repo create that fails while the repo exists links nothing in --publish" {
+  make_local_repo my-repo
+  GH_FAIL_AFTER_CREATE=1 run "$SCRIPT" apply --publish my-org/my-repo
+  [ "$status" -eq 15 ]
+  [[ "${lines[${#lines[@]}-1]}" == "CREATE_FAILED_EXISTS my-org/my-repo "* ]] || false
+  [ -z "$(git -C "$SRC/my-repo" remote)" ]
+}
+
+@test "--publish rejects --no-readme" {
+  make_local_repo my-repo
+  run "$SCRIPT" plan --publish --no-readme my-org/my-repo
+  [ "$status" -eq 2 ]
+  [ ! -s "$GH_LOG" ]
 }
 
 # --- validation ----------------------------------------------------------

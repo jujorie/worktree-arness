@@ -12,6 +12,8 @@ One folder per repo: `source/<repo>/`, a full git clone. These are the **origin*
 |---|---|---|
 | Clone a repo | `repo-clone <url>` | `source/<repo>/` (name derived from the URL, or `--name`) |
 | Create a new repo on GitHub | `repo-create <owner>/<name>` | the repo on GitHub and its clone in `source/<name>/` |
+| Create a local-only repo (no GitHub) | `repo-create --local <name>` | `source/<name>/` with `git init`, branch `main` and an initial commit, ready for worktrees |
+| Put a local-only repo on GitHub | `repo-create --publish <owner>/<name>` | the repo on GitHub, set as `origin` of `source/<name>/`, its branch pushed |
 | Work on a branch | `worktree-create` | `worktrees/<repo>/<name>/`, created from `source/<repo>` |
 
 ## Rules

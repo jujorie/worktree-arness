@@ -49,7 +49,7 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | Skill | Purpose |
 |---|---|
 | `repo-clone` | Clone a repo URL into `source/`; asks before overwriting or offers a copy under another name |
-| `repo-create` | Create a new GitHub repo with `gh` (private by default, with a README) and clone it into `source/`; shows the plan and asks before creating |
+| `repo-create` | Create a new GitHub repo with `gh` (private by default, with a README) and clone it into `source/`; `--local` makes a local-only repo instead (no GitHub) and `--publish` later creates its GitHub repo and pushes it; shows the plan and asks before creating |
 | `worktree-create` | Create a worktree in `worktrees/<repo>/<name>` from a repo in `source/`; confirms the base branch; `--detach` checks out an existing branch as it is (e.g. a release); fails with `NO_SOURCE` / `NO_NAME` |
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
