@@ -757,6 +757,72 @@ other_plugin_replacing() { other_plugin --skills demo-hello --replace skills/dem
   [ ! -e "$SANDBOX/plugins/demo" ] && [ ! -e "$SANDBOX/plugins/.demo.state" ] || false
 }
 
+@test "an update never prunes empty folders inside a backup it keeps" {
+  mine_skill
+  mkdir -p "$SANDBOX/skills/demo-hello/.git/refs/heads"
+  add_demo --skills demo-hello --replace skills/demo-hello
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  "$SCRIPT" update demo >/dev/null 2>&1 || true
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
+  [ "$status" -eq 0 ]
+  [ -d "$SANDBOX/plugins/.replaced/demo/skills/demo-hello/.git/refs/heads" ]
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  [ -d "$SANDBOX/skills/demo-hello/.git/refs/heads" ]
+  [ ! -e "$SANDBOX/plugins/.replaced" ]
+}
+
+@test "an update from a state without skipped lines keeps every skill selected" {
+  add_demo
+  grep -v '^skipped\.' "$SANDBOX/plugins/.demo.state" > "$BATS_TEST_TMPDIR/st" && mv "$BATS_TEST_TMPDIR/st" "$SANDBOX/plugins/.demo.state"
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qx "SKILL demo-hello"
+  printf '%s\n' "$output" | grep -qx "AGENT demo-helper"
+  printf '%s\n' "$output" | grep -qx "SELECT skills demo-hello"
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
+  [ "$status" -eq 0 ]
+  state | grep -qx 'skills=demo-hello'
+  state | grep -qx 'skipped.skills='
+}
+
+@test "replacing the skill of a plugin whose state has no skipped lines records it there" {
+  other_plugin
+  grep -v '^skipped\.' "$SANDBOX/plugins/.other.state" > "$BATS_TEST_TMPDIR/st" && mv "$BATS_TEST_TMPDIR/st" "$SANDBOX/plugins/.other.state"
+  add_demo --skills demo-hello --replace skills/demo-hello
+  grep -qx 'skipped.skills=demo-hello' "$SANDBOX/plugins/.other.state"
+  run "$SCRIPT" apply remove demo
+  printf '%s\n' "$output" | grep -qx "RESTORED skills/demo-hello"
+  [ "$(readlink "$SANDBOX/skills/demo-hello")" = "../plugins/other/skills/demo-hello" ]
+}
+
+@test "remove reports a local backup that is gone" {
+  mine_skill
+  add_demo --skills demo-hello --replace skills/demo-hello
+  rm -rf "$SANDBOX/plugins/.replaced/demo/skills/demo-hello"
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORE_SKIPPED skills/demo-hello missing $SANDBOX/plugins/.replaced/demo/skills/demo-hello"
+  [ ! -e "$SANDBOX/skills/demo-hello" ] && [ ! -L "$SANDBOX/skills/demo-hello" ] || false
+  [ ! -e "$SANDBOX/plugins/.replaced" ]
+}
+
+@test "replacing a local agent moves it aside, and remove puts it back" {
+  echo mine > "$SANDBOX/agents/demo-helper.md"
+  run "$SCRIPT" apply add --commit "$(origin_head)" --adopted 0 --skills demo-hello --agents demo-helper --replace agents/demo-helper.md "$URL"
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$SANDBOX/agents/demo-helper.md")" = "../plugins/demo/agents/demo-helper.md" ]
+  [ "$(cat "$SANDBOX/plugins/.replaced/demo/agents/demo-helper.md")" = mine ]
+  run "$SCRIPT" apply remove demo
+  printf '%s\n' "$output" | grep -qx "RESTORED agents/demo-helper.md"
+  [ ! -L "$SANDBOX/agents/demo-helper.md" ]
+  [ "$(cat "$SANDBOX/agents/demo-helper.md")" = mine ]
+  [ ! -e "$SANDBOX/plugins/.replaced" ]
+}
+
 @test "a missing requirement is MISSING_REQUIREMENT" {
   edit_conf 's/^requires=.*/requires=git no-such-cmd-xyz/'
   commit_origin "req"

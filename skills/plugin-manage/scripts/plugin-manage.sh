@@ -55,8 +55,10 @@
 #                                         update, unless it is selected again)
 #   RESTORE_IF_UNSELECTED <path> <how>    update: selected by default; apply puts it back if left out
 #   RESTORED <path>                       apply: put back what the plugin had replaced
-#   RESTORE_SKIPPED <path> <taken|missing> <backup|plugin:<name>>   apply: could not put it back; a
-#                                         backup stays where shown, and update keeps it recorded (taken)
+#   RESTORE_SKIPPED <path> <taken|missing> <backup|plugin:<name>|invalid>   apply: could not put it
+#                                         back; a backup stays where shown, and update keeps it recorded
+#                                         (taken). invalid: a replaced= line of the state that is not an
+#                                         item path, ignored (nothing to put back)
 #   ALLOW <provider> <rule>               rule rendered (claude) or to add by hand (opencode)
 #   NEW_ALLOW <provider> <rule>           update: rule the installed version did not have
 #   OPENCODE_AUTO_ALLOW <path>            a plugin skill script OpenCode runs without asking
@@ -746,9 +748,14 @@ restore_replaced() {
     fi
     case "$c" in
       local)
-        if ! taken "$PLUGINS/.replaced/$name/$rel"; then echo "RESTORE_SKIPPED $rel missing $PLUGINS/.replaced/$name/$rel"; continue; fi
+        if ! taken "$PLUGINS/.replaced/$name/$rel"; then
+          echo "RESTORE_SKIPPED $rel missing $PLUGINS/.replaced/$name/$rel"
+          prune_backup_parents "$name" "$rel"
+          continue
+        fi
         mkdir -p "$ROOT/$kind"
-        mv "$PLUGINS/.replaced/$name/$rel" "$ROOT/$rel" ;;
+        mv "$PLUGINS/.replaced/$name/$rel" "$ROOT/$rel"
+        prune_backup_parents "$name" "$rel" ;;
       plugin:*)
         if [ "$kind" = skills ]; then src="../plugins/${c#plugin:}/skills/$n"; else src="../plugins/${c#plugin:}/agents/$n.md"; fi
         # Only what that plugin's state lists as left out: a version that no longer declares it was
@@ -763,10 +770,18 @@ restore_replaced() {
     esac
     echo "RESTORED $rel"
   done <<< "$(conf_value "$(state_file "$name")" replaced)"
-  if [ -d "$PLUGINS/.replaced/$name" ]; then
-    find "$PLUGINS/.replaced/$name" -depth -type d -empty -exec rmdir {} \;
-    rmdir "$PLUGINS/.replaced" 2>/dev/null || true
-  fi
+}
+
+# prune_backup_parents <plugin> <path>: after a backup moved back, remove the folders it leaves empty on
+# its way up to plugins/.replaced, and stop at the first one that is not empty. Never walks into a
+# backup: an empty folder inside one (a .git/refs/tags) is its content.
+prune_backup_parents() {
+  local d
+  d="$(dirname "$PLUGINS/.replaced/$1/$2")"
+  while [ "$d" != "$PLUGINS" ]; do
+    rmdir "$d" 2>/dev/null || return 0
+    d="$(dirname "$d")"
+  done
 }
 
 # relink <target> <path>: (re)create path as a link to target, relative to the path's directory.

@@ -68,7 +68,7 @@ All the work is done by `scripts/plugin-manage.sh` (in this skill's folder), run
 | `ADDED <name> <path>` / `UPDATED <name> <from> <to>` | 0 | Report it. Relay the `MANUAL opencode bash <rule>` and `MANUAL opencode skill <name>` lines: the user adds them to `opencode.json` if they use OpenCode. Tell the user to restart the agent session to load new skills and agents. |
 | `REMOVED <name>` | 0 | Report it; restart the session to unload its skills. |
 | `RESTORED <path>` | 0 | Before `UPDATED`/`REMOVED`: what the plugin had replaced is back. Report it. |
-| `RESTORE_SKIPPED <path> <taken\|missing> <backup\|plugin:<name>>` | 0 | It could not be put back: the path is taken again (an update keeps it recorded and tries again later; a remove leaves the backup where shown), or the backup is gone. Tell the user, with the backup path. |
+| `RESTORE_SKIPPED <path> <taken\|missing> <backup\|plugin:<name>\|invalid>` | 0 | It could not be put back: the path is taken again (an update keeps it recorded and tries again later; a remove leaves the backup where shown), or the backup is gone. Tell the user, with the backup path. `missing invalid`: a corrupt `replaced=` line of the state, ignored; there is nothing to put back. |
 | `MISMATCH <expected> <actual>` | 14 | The source changed after the plan. Run the plan again and show it. |
 | `ADOPTION_CHANGED <expected> <actual>` | 14 | The adopted command appeared or went away after the plan, so `install` would (not) run against what was shown; nothing was written. Run the plan again and show it. |
 | `INSTALL_FAILED <name>` | 13 | The install command failed (its output is on stderr); clone and links are kept. Show the error, then offer update after a fix, or remove. |
