@@ -34,11 +34,11 @@ You do not have to install every skill and agent of a plugin: the plugin-manage 
 | What takes the name | Replacing it | When the plugin is removed, or stops linking it |
 |---|---|---|
 | `tracked`: a skill or agent of arness itself | refused (`NOT_REPLACEABLE`) | |
-| `local`: a private skill, a file, a link elsewhere | moves it to `plugins/.replaced/<plugin>/` (`BACKUP_EXISTS` when that path is taken) | moved back |
+| `local`: a private skill, a file, a link elsewhere | moves it to `plugins/.replaced/<plugin>/` (`BACKUP_EXISTS` when that path is taken) | moved back, unless the path is taken again |
 | `plugin:<other>`: another installed plugin's link | takes it out of that plugin's selection (its state lists it in `skipped.skills`) | given back to that plugin |
 | `dangling`: a broken link | removes it | nothing to put back |
 
-Nothing is put back over a path that is taken again: `apply` prints `RESTORE_SKIPPED <path> taken` and a local backup stays in `plugins/.replaced/<plugin>/`. Otherwise it prints `RESTORED <path>`.
+The plan of `remove`, and of an `update` that no longer links a replacing skill or agent, lists what goes back as `RESTORE <path> <what>`, and `apply` prints `RESTORED <path>`. Nothing is put back over a path that is taken again: `apply` prints `RESTORE_SKIPPED <path> taken <backup>`; an update keeps it recorded and tries again on the next update or remove, while a remove leaves the backup where shown.
 
 The state keeps the choice (`skills=` and `agents=` are the selection, `skipped.skills=` and `skipped.agents=` the rest, `replaced=` what was replaced), so `update`, `sync`, `list` and the rendered rules follow it: a skill left out gets no link and no `Skill(<n>)` rule, an update keeps it out (`SKIPPED_SKILL`) and offers only what is new (`NEW_SKILL`). `list` counts skills and agents as linked/selected. A skill that needs another one of its plugin breaks when that one is left out: the plugin's README says which go together.
 

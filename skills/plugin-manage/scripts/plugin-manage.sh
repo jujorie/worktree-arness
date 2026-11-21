@@ -51,9 +51,11 @@
 #                                         skill or agent of this repo (cannot be replaced), a local one,
 #                                         a dangling link or another plugin's link (not selected)
 #   SELECT <skills|agents> <a,b|->        the default selection apply takes without --skills / --agents
-#   RESTORE <path> <local|plugin:<name>>  remove: what the plugin replaced, put back by apply
+#   RESTORE <path> <local|plugin:<name>>  remove, update: what the plugin replaced and apply puts back (on
+#                                         update, unless it is selected again)
 #   RESTORED <path>                       apply: put back what the plugin had replaced
-#   RESTORE_SKIPPED <path> <why>          apply: could not put it back (taken, missing); the backup stays
+#   RESTORE_SKIPPED <path> <taken|missing> <backup|plugin:<name>>   apply: could not put it back; a
+#                                         backup stays where shown, and update keeps it recorded (taken)
 #   ALLOW <provider> <rule>               rule rendered (claude) or to add by hand (opencode)
 #   NEW_ALLOW <provider> <rule>           update: rule the installed version did not have
 #   OPENCODE_AUTO_ALLOW <path>            a plugin skill script OpenCode runs without asking
@@ -680,7 +682,7 @@ state_move() {
       seen = 1; v = substr($0, length(K) + 10)
       print "skipped." K "=" (D == "out" ? add(v, N) : drop(v, N)); next
     }
-    $0 == rule { next }
+    K == "skills" && $0 == rule { next }
     { print }
     END {
       if (!seen && D == "out") print "skipped." K "=" N
@@ -689,8 +691,17 @@ state_move() {
   mv "$tmp" "$file"
 }
 
-# do_replacements <plugin>: move away what takes the paths of REPLACE, so the plugin links there, and
-# add to STATE_REPLACED what remove puts back (a dangling link is just removed).
+# record_replacements: add to STATE_REPLACED what REPLACE will move away and remove puts back (a dangling
+# link is just removed). apply writes the state with it before do_replacements moves anything, so an
+# apply stopped half-way still knows what to put back.
+record_replacements() {
+  local rel c
+  while read -r rel c; do
+    case "$c" in local|plugin:*) STATE_REPLACED="$STATE_REPLACED$rel $c"$'\n' ;; esac
+  done <<< "$REPLACE"
+}
+
+# do_replacements <plugin>: move away what takes the paths of REPLACE, so the plugin links there.
 do_replacements() {
   local name="$1" rel c b
   while read -r rel c; do
@@ -700,20 +711,19 @@ do_replacements() {
       local)
         b="$PLUGINS/.replaced/$name/$rel"
         mkdir -p "$(dirname "$b")"
-        mv "$ROOT/$rel" "$b"
-        STATE_REPLACED="$STATE_REPLACED$rel $c"$'\n' ;;
+        mv "$ROOT/$rel" "$b" ;;
       plugin:*)
         # shellcheck disable=SC2046
         state_move "${c#plugin:}" $(item_kind_name "$rel") out
-        rm "$ROOT/$rel"
-        STATE_REPLACED="$STATE_REPLACED$rel $c"$'\n' ;;
+        rm "$ROOT/$rel" ;;
     esac
   done <<< "$REPLACE"
 }
 
 # restore_replaced <plugin>: put back what the plugin replaced and does not link any more (SEL_SKILLS and
 # SEL_AGENTS; empty on remove), after its links are gone. Sets STATE_REPLACED to the entries still in
-# force. Never overwrites: a path taken since keeps its backup (RESTORE_SKIPPED).
+# force: the selected ones, and those that could not be put back, so a later update or remove tries
+# again. Never overwrites: a path taken since keeps its backup (RESTORE_SKIPPED, with where it is).
 restore_replaced() {
   local name="$1" line rel c kind n src
   STATE_REPLACED=""
@@ -727,16 +737,20 @@ restore_replaced() {
       STATE_REPLACED="$STATE_REPLACED$line"$'\n'
       continue
     fi
-    if taken "$ROOT/$rel"; then echo "RESTORE_SKIPPED $rel taken"; continue; fi
+    if taken "$ROOT/$rel"; then
+      if [ "$c" = local ]; then echo "RESTORE_SKIPPED $rel taken $PLUGINS/.replaced/$name/$rel"; else echo "RESTORE_SKIPPED $rel taken $c"; fi
+      STATE_REPLACED="$STATE_REPLACED$line"$'\n'
+      continue
+    fi
     case "$c" in
       local)
-        if ! taken "$PLUGINS/.replaced/$name/$rel"; then echo "RESTORE_SKIPPED $rel missing"; continue; fi
+        if ! taken "$PLUGINS/.replaced/$name/$rel"; then echo "RESTORE_SKIPPED $rel missing $PLUGINS/.replaced/$name/$rel"; continue; fi
         mkdir -p "$ROOT/$kind"
         mv "$PLUGINS/.replaced/$name/$rel" "$ROOT/$rel" ;;
       plugin:*)
         if [ "$kind" = skills ]; then src="../plugins/${c#plugin:}/skills/$n"; else src="../plugins/${c#plugin:}/agents/$n.md"; fi
         if [ ! -f "$(state_file "${c#plugin:}")" ] || [ ! -e "$ROOT/$kind/$src" ]; then
-          echo "RESTORE_SKIPPED $rel missing"; continue
+          echo "RESTORE_SKIPPED $rel missing $c"; continue
         fi
         state_move "${c#plugin:}" "$kind" "$n" in
         make_link "$src" "$ROOT/$rel" ;;
@@ -1039,9 +1053,10 @@ apply_add() {
   local dest="$PLUGINS/$M_NAME"
   mv "$ADD_DIR" "$dest"
   STATE_REPLACED=""
+  record_replacements
+  write_state "$M_NAME" "$ADD_COMMIT" "$ADD_REF" "$ADD_KIND" ok
   do_replacements "$M_NAME"
   link_plugin "$M_NAME" "$SEL_SKILLS" "$SEL_AGENTS"
-  write_state "$M_NAME" "$ADD_COMMIT" "$ADD_REF" "$ADD_KIND" ok
   refresh_providers
   run_install "$M_NAME" "$dest"
   print_manual
@@ -1116,6 +1131,21 @@ parse_name_args() {
   case "$ARG_ADOPTED" in ""|0|1) ;; *) die "invalid --adopted (0 or 1): $ARG_ADOPTED" ;; esac
 }
 
+# print_update_restores <plugin>: RESTORE for each replacement whose item the default selection leaves
+# out (no longer declared, or taken): apply puts it back unless it is selected.
+print_update_restores() {
+  local name="$1" line rel kind n dsel
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    rel="${line%% *}"
+    # shellcheck disable=SC2046
+    set -- $(item_kind_name "$rel")
+    kind="$1" n="$2"
+    dsel="$(default_selection "$(classify_items "$kind" "$name" 1)")"
+    in_list "$n" "$dsel" || echo "RESTORE $line"
+  done <<< "$(conf_value "$(state_file "$name")" replaced)"
+}
+
 cmd_update() {
   parse_name_args "$@"
   [ -z "$ARG_COMMIT$ARG_ADOPTED$ARG_SEL" ] || die "--commit, --adopted, --skills, --agents and --replace belong to 'apply update'"
@@ -1135,6 +1165,7 @@ cmd_update() {
   while IFS= read -r rule; do
     if [ -n "$rule" ] && ! conf_value "$state" allow.opencode | grep -qxF -- "$rule"; then echo "NEW_ALLOW opencode $rule"; fi
   done <<< "$M_ALLOW_OPENCODE"
+  print_update_restores "$name"
   fail "$EXIT_CONFIRM" "CONFIRM_UPDATE $name $UP_OLD $UP_TARGET $UP_REF $ADOPTED"
 }
 
@@ -1154,9 +1185,10 @@ apply_update() {
   git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
   unlink_plugin "$name"
   restore_replaced "$name"
+  record_replacements
+  write_state "$name" "$UP_TARGET" "$UP_REF" "$UP_KIND" ok
   do_replacements "$name"
   link_plugin "$name" "$SEL_SKILLS" "$SEL_AGENTS"
-  write_state "$name" "$UP_TARGET" "$UP_REF" "$UP_KIND" ok
   refresh_providers
   run_install "$name" "$UP_DEST"
   print_manual

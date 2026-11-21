@@ -441,8 +441,11 @@ other_plugin() {
   git_q init -q "$OTHER"
   git_q -C "$OTHER" add -A
   git_q -C "$OTHER" commit -q -m o1
-  "$SCRIPT" apply add --commit "$(git -C "$OTHER" rev-parse HEAD)" --adopted 0 "file://$OTHER" >/dev/null 2>&1
+  "$SCRIPT" apply add --commit "$(git -C "$OTHER" rev-parse HEAD)" --adopted 0 "$@" "file://$OTHER" >/dev/null 2>&1
 }
+
+# other_plugin_replacing: other_plugin, taking demo-hello over from whatever has it.
+other_plugin_replacing() { other_plugin --skills demo-hello --replace skills/demo-hello; }
 
 @test "a name taken by a local skill is a CONFLICT left out of the default selection" {
   mine_skill
@@ -509,7 +512,7 @@ other_plugin() {
   mkdir "$SANDBOX/skills/demo-hello"
   run "$SCRIPT" apply remove demo
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qx "RESTORE_SKIPPED skills/demo-hello taken"
+  printf '%s\n' "$output" | grep -qx "RESTORE_SKIPPED skills/demo-hello taken $SANDBOX/plugins/.replaced/demo/skills/demo-hello"
   [ "$(cat "$SANDBOX/plugins/.replaced/demo/skills/demo-hello/SKILL.md")" = mine ]
 }
 
@@ -647,6 +650,70 @@ other_plugin() {
   [ "$status" -eq 0 ]
   [ "$(readlink "$SANDBOX/skills/demo-hello")" = "../plugins/demo/skills/demo-hello" ]
   state | grep -qx 'replaced=skills/demo-hello local'
+}
+
+@test "a replacement that cannot be put back on update stays recorded until it can" {
+  mine_skill
+  add_demo --skills demo-hello --replace skills/demo-hello
+  other_plugin_replacing
+  [ "$(readlink "$SANDBOX/skills/demo-hello")" = "../plugins/other/skills/demo-hello" ]
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qx "RESTORE skills/demo-hello local"
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main --skills - --agents demo-helper demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORE_SKIPPED skills/demo-hello taken $SANDBOX/plugins/.replaced/demo/skills/demo-hello"
+  state | grep -qx 'replaced=skills/demo-hello local'
+  "$SCRIPT" apply remove other >/dev/null 2>&1
+  [ "$(readlink "$SANDBOX/skills/demo-hello")" = "../plugins/demo/skills/demo-hello" ]
+  run "$SCRIPT" apply remove demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORED skills/demo-hello"
+  [ "$(cat "$SANDBOX/skills/demo-hello/SKILL.md")" = mine ]
+}
+
+@test "replacing another plugin's agent keeps that plugin's skill rule of the same name" {
+  mkdir -p "$ORIGIN/agents"
+  printf -- '---\nname: demo-hello\n---\n' > "$ORIGIN/agents/demo-hello.md"
+  edit_conf 's/^agents=.*/agents=demo-helper demo-hello/'
+  commit_origin "c2"
+  add_demo
+  grep -qx 'allow.claude=Skill(demo-hello)' "$SANDBOX/plugins/.demo.state"
+  OTHER="$BATS_TEST_TMPDIR/origin/other-plugin"
+  mkdir -p "$OTHER/agents"
+  printf -- '---\nname: demo-hello\n---\n' > "$OTHER/agents/demo-hello.md"
+  printf '%s\n' 'name=other' 'version=0.1.0' 'prefix=demo-' 'arness=1' 'description=Other plugin' 'agents=demo-hello' \
+    > "$OTHER/arness-plugin.conf"
+  git_q init -q "$OTHER"
+  git_q -C "$OTHER" add -A
+  git_q -C "$OTHER" commit -q -m o1
+  run "$SCRIPT" apply add --commit "$(git -C "$OTHER" rev-parse HEAD)" --adopted 0 --agents demo-hello --replace agents/demo-hello.md "file://$OTHER"
+  [ "$status" -eq 0 ]
+  grep -qx 'agents=demo-helper' "$SANDBOX/plugins/.demo.state"
+  grep -qx 'allow.claude=Skill(demo-hello)' "$SANDBOX/plugins/.demo.state"
+  run "$SCRIPT" apply remove other
+  printf '%s\n' "$output" | grep -qx "RESTORED agents/demo-hello.md"
+  [ "$(readlink "$SANDBOX/agents/demo-hello.md")" = "../plugins/demo/agents/demo-hello.md" ]
+  grep -qx 'agents=demo-helper demo-hello' "$SANDBOX/plugins/.demo.state"
+  [ "$(grep -c 'allow.claude=Skill(demo-hello)' "$SANDBOX/plugins/.demo.state")" -eq 1 ]
+}
+
+@test "the update plan announces the restore of a replacing skill the new version drops" {
+  mine_skill
+  add_demo --skills demo-hello --replace skills/demo-hello
+  rm -rf "$ORIGIN/skills"
+  write_conf
+  edit_conf '/^skills=/d; s/^version=.*/version=0.2.0/; s|^install=.*|install=true|'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  printf '%s\n' "$output" | grep -qx "RESTORE skills/demo-hello local"
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx "RESTORED skills/demo-hello"
+  [ "$(cat "$SANDBOX/skills/demo-hello/SKILL.md")" = mine ]
 }
 
 @test "a missing requirement is MISSING_REQUIREMENT" {
