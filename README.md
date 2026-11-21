@@ -54,7 +54,7 @@ Settings templates use `{{$ARNESS_ROOT}}`, replaced with the absolute repo path 
 | `worktree-config` | Copy `config/<repo>/` into an existing worktree and run its `install.sh` there; `worktree-create` runs it automatically |
 | `worktree-clean` | List worktrees with merged status and remove the ones you pick (`all` = merged only) |
 | `learnings-save` | Review the conversation for what was learned and save each item where it belongs (memory, `CODESTYLE.md`, a skill, a README); use before clearing the context |
-| `plugin-manage` | Add, update, remove and list plugins in `plugins/`, by URL or by name from the official ones in `PLUGINS.md`; shows each plugin's permission rules and install command and asks before running them |
+| `plugin-manage` | Add, update, remove and list plugins in `plugins/`, by URL or by name from the official ones in `PLUGINS.md`; shows each plugin's permission rules and install command and asks before running them; lets you pick which of its skills and agents to install, and whether to replace one with the same name |
 
 Rules for new skills: scripts go in `skills/<name>/scripts/`, tests in `skills/<name>/tests/`, and `name` in `SKILL.md` must equal the folder name.
 

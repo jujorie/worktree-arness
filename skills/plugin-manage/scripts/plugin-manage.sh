@@ -6,8 +6,8 @@
 # Usage: plugin-manage.sh add [--ref REF] <url|name>                  plan only, writes nothing
 #        plugin-manage.sh update [--ref REF] [--no-fetch] <name>      plan only (fetches)
 #        plugin-manage.sh remove <name>                               plan only
-#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] <url>
-#        plugin-manage.sh apply update --commit SHA --adopted 0|1 [--ref REF] <name>
+#        plugin-manage.sh apply add --commit SHA --adopted 0|1 [--ref REF] [SELECTION] <url>
+#        plugin-manage.sh apply update --commit SHA --adopted 0|1 [--ref REF] [SELECTION] <name>
 #        plugin-manage.sh apply remove [--force] <name>
 #        plugin-manage.sh list
 #        plugin-manage.sh check <dir>
@@ -24,6 +24,16 @@
 # permission allowlists on purpose, so the agent's own tool prompt asks the user before it runs.
 # What arness uses of an installed plugin (rules, links, uninstall) comes from plugins/.<name>.state,
 # written by apply from the validated manifest, never from the clone's files as they are now.
+#
+# SELECTION: --skills <a,b|-> --agents <a,b|-> --replace <skills/<n>,agents/<n>.md>. Which of the
+# plugin's skills and agents to link ("-": none); without --skills (--agents), the SELECT line of the
+# plan. A selected name taken by something that is not this plugin's (a CONFLICT line) needs its path in
+# --replace, or apply stops with NAME_CONFLICT. Replacing never deletes: a skill or agent of this repo
+# (tracked) cannot be replaced (NOT_REPLACEABLE); a local one is moved to plugins/.replaced/<plugin>/;
+# one of another plugin leaves that plugin's selection; a dangling link is removed. The state records the
+# selection (skills=, agents=), what was left out (skipped.skills=, skipped.agents=) and what was replaced
+# (replaced=); update keeps the selection, and remove (or an update that drops a replacing skill) puts
+# back what was replaced.
 # run-hook runs the hook.<event> command of every installed plugin that declares one, in its folder, with
 # <args> appended (events: worktree-remove, run by worktree-clean before it removes a worktree, with
 # <repo>/<name>). A plugin whose clone was changed (MODIFIED in list) is not run: it counts as failed.
@@ -34,7 +44,16 @@
 #   OFFICIAL <name> <url> <ref> <description>   catalog: one line per official plugin
 #   SOURCE <url|-> <ref> <branch|tag|commit>
 #   DESCRIPTION <text> | REQUIRES <commands> | PROVIDES <commands>
-#   SKILL <name> | AGENT <name>           what the plugin links
+#   SKILL <name> | AGENT <name>           what the plugin links (selected by default)
+#   NEW_SKILL <name> | NEW_AGENT <name>   update: declared since the installed version (selected by default)
+#   SKIPPED_SKILL <name> | SKIPPED_AGENT <name>   update: left out at install or last update (not selected)
+#   CONFLICT <path> <tracked|local|dangling|plugin:<name>>   the name is taken by something else: a
+#                                         skill or agent of this repo (cannot be replaced), a local one,
+#                                         a dangling link or another plugin's link (not selected)
+#   SELECT <skills|agents> <a,b|->        the default selection apply takes without --skills / --agents
+#   RESTORE <path> <local|plugin:<name>>  remove: what the plugin replaced, put back by apply
+#   RESTORED <path>                       apply: put back what the plugin had replaced
+#   RESTORE_SKIPPED <path> <why>          apply: could not put it back (taken, missing); the backup stays
 #   ALLOW <provider> <rule>               rule rendered (claude) or to add by hand (opencode)
 #   NEW_ALLOW <provider> <rule>           update: rule the installed version did not have
 #   OPENCODE_AUTO_ALLOW <path>            a plugin skill script OpenCode runs without asking
@@ -68,7 +87,7 @@
 #   VALID <name> <version>                check passed
 #   INSTALLED <name> <version> <commit> <ref> <state> <skills> <agents>
 #                                         list line; state OK|BROKEN_LINK|MODIFIED|INSTALL_FAILED|UNMANAGED,
-#                                         skills and agents as linked/declared; "-" for an unknown value
+#                                         skills and agents as linked/selected; "-" for an unknown value
 #   NONE                                  list: no plugins; catalog: no official plugin
 #   BAD_CATALOG line <n>: <detail>        PLUGINS.md has a row that is not a valid entry (exit 4)
 #   NOT_IN_CATALOG <name>                 add: no official plugin of that name (exit 16)
@@ -79,7 +98,9 @@
 #   ARNESS_VERSION <value>                unsupported plugin contract (exit 4)
 #   BAD_RULE <provider> <rule>: <why>     rule outside the allowed shapes (exit 4)
 #   MISSING_REQUIREMENT <command>         a required command is not installed (exit 5)
-#   NAME_CONFLICT <path>                  a skill or agent of that name exists and is not this plugin's (exit 6)
+#   NAME_CONFLICT <path>                  apply: a selected skill or agent is taken and not in --replace (exit 6)
+#   NOT_REPLACEABLE <path> tracked        apply: --replace names a skill or agent of this repo (exit 6)
+#   BACKUP_EXISTS <path>                  apply: the folder a replaced one would move to is taken (exit 6)
 #   ALREADY_INSTALLED <name>              use update (exit 10)
 #   DIRTY <path> <why>                    uncommitted-changes or moved (HEAD is not the applied commit) (exit 11)
 #   NOT_INSTALLED <name>                  (exit 12)
@@ -415,10 +436,12 @@ check_opencode_gate() {
   if [ -f "$f" ] && ! grep -qF "$OPENCODE_APPLY_RULE" "$f"; then echo "OPENCODE_UNGATED opencode.json"; fi
 }
 
-# Claude Code rules arness grants for the plugin: Skill(<s>) for each skill, then its allow.claude rules.
+# claude_rules [skills]: Claude Code rules arness grants for the plugin: Skill(<s>) for each skill (by
+# default every declared one, as the plan shows them; apply passes the selection), then its allow.claude
+# rules.
 claude_rules() {
   local n
-  for n in $M_SKILLS; do printf 'Skill(%s)\n' "$n"; done
+  for n in ${1-$M_SKILLS}; do printf 'Skill(%s)\n' "$n"; done
   printf '%s' "$M_ALLOW_CLAUDE"
 }
 
@@ -429,7 +452,8 @@ print_rules() {
   done <<< "$rules"
 }
 
-# print_plan <commit> <url> <ref> <kind> <dir>: everything the user consents to.
+# print_plan <commit> <url> <ref> <kind> <dir> <update 0|1>: everything the user consents to. The rules
+# and scripts are those of every declared skill: apply grants those of the selection only.
 print_plan() {
   local n f
   echo "PLUGIN $M_NAME $M_VERSION $1"
@@ -437,8 +461,8 @@ print_plan() {
   echo "DESCRIPTION $M_DESC"
   if [ -n "$M_REQUIRES" ]; then echo "REQUIRES $M_REQUIRES"; fi
   if [ -n "$M_PROVIDES" ]; then echo "PROVIDES $M_PROVIDES"; fi
-  for n in $M_SKILLS; do echo "SKILL $n"; done
-  for n in $M_AGENTS; do echo "AGENT $n"; done
+  print_items skills "$M_NAME" "$6"
+  print_items agents "$M_NAME" "$6"
   print_rules ALLOW claude "$(claude_rules)"
   print_rules ALLOW opencode "$M_ALLOW_OPENCODE"
   for n in $M_SKILLS; do
@@ -462,22 +486,25 @@ print_plan() {
 print_manual() {
   local n
   print_rules "MANUAL opencode" bash "$M_ALLOW_OPENCODE"
-  for n in $M_SKILLS; do echo "MANUAL opencode skill $n"; done
+  for n in $SEL_SKILLS; do echo "MANUAL opencode skill $n"; done
 }
 
 # --- state: what apply validated, the only source render, sync, list and remove trust ------------
 
 state_file() { printf '%s/.%s.state\n' "$PLUGINS" "$1"; }
 
-# write_state <name> <commit> <ref> <kind> <status>, from the validated M_* globals.
+# write_state <name> <commit> <ref> <kind> <status>, from the validated M_* globals and the selection
+# (SEL_*, SKIP_*, STATE_REPLACED).
 write_state() {
   local file tmp
   file="$(state_file "$1")"
   tmp="$file.tmp"
   {
     printf 'commit=%s\nref=%s\nkind=%s\nstatus=%s\nadopted=%s\n' "$2" "$3" "$4" "$5" "$ADOPTED"
-    printf 'version=%s\nskills=%s\nagents=%s\nprovides=%s\nuninstall=%s\n' "$M_VERSION" "$M_SKILLS" "$M_AGENTS" "$M_PROVIDES" "$M_UNINSTALL"
-    claude_rules | awk 'NF { print "allow.claude=" $0 }'
+    printf 'version=%s\nskills=%s\nagents=%s\nprovides=%s\nuninstall=%s\n' "$M_VERSION" "$SEL_SKILLS" "$SEL_AGENTS" "$M_PROVIDES" "$M_UNINSTALL"
+    printf 'skipped.skills=%s\nskipped.agents=%s\n' "$SKIP_SKILLS" "$SKIP_AGENTS"
+    printf '%s' "$STATE_REPLACED" | awk 'NF { print "replaced=" $0 }'
+    claude_rules "$SEL_SKILLS" | awk 'NF { print "allow.claude=" $0 }'
     printf '%s' "$M_ALLOW_OPENCODE" | awk 'NF { print "allow.opencode=" $0 }'
     printf '%s' "$M_HOOKS" | awk 'NF { print "hook." $0 }'
   } > "$tmp"
@@ -509,16 +536,218 @@ belongs_to() {
 
 taken() { [ -e "$1" ] || [ -L "$1" ]; }
 
-check_conflicts() {
-  local name="$1" n p
-  for n in $M_SKILLS; do
-    p="$ROOT/skills/$n"
-    if taken "$p"; then belongs_to "$p" "$name" || fail "$EXIT_CONFLICT" "NAME_CONFLICT skills/$n"; fi
+in_list() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# --- selection: which declared skills and agents apply links ------------------------------------
+
+# item_rel <skills|agents> <n>: the item's path under the arness root.
+item_rel() { if [ "$1" = skills ]; then printf 'skills/%s\n' "$2"; else printf 'agents/%s.md\n' "$2"; fi; }
+
+# item_kind_name <path>: "<skills|agents> <n>" of an item path (item_rel reversed).
+item_kind_name() {
+  local n
+  case "$1" in
+    skills/*) printf 'skills %s\n' "${1#skills/}" ;;
+    agents/*.md) n="${1#agents/}"; printf 'agents %s\n' "${n%.md}" ;;
+  esac
+}
+
+# link_owner <path>: the plugin a link points into (../plugins/<p>/... or the absolute form a Windows
+# junction reports); empty for anything else.
+link_owner() {
+  local t p
+  [ -L "$1" ] || return 0
+  t="$(readlink "$1")"
+  case "$t" in
+    "../plugins/"*/*) p="${t#../plugins/}" ;;
+    "$ROOT/plugins/"*/*) p="${t#"$ROOT"/plugins/}" ;;
+    *) return 0 ;;
+  esac
+  p="${p%%/*}"
+  if is_slug "$p"; then printf '%s\n' "$p"; fi
+}
+
+# conflict_kind <skills|agents> <n> <plugin>: empty when the item's path is free or is this plugin's
+# link; else what takes it: tracked (a skill or agent of this repo, never replaced), plugin:<other> (the
+# link of another installed plugin), dangling (any other broken link) or local (anything else: a private
+# skill, a link elsewhere).
+conflict_kind() {
+  local rel p other
+  rel="$(item_rel "$1" "$2")"
+  p="$ROOT/$rel"
+  taken "$p" || return 0
+  if belongs_to "$p" "$3"; then return 0; fi
+  if [ -n "$(git -C "$ROOT" ls-files -- "$rel" 2>/dev/null)" ]; then echo tracked; return 0; fi
+  other="$(link_owner "$p")"
+  if [ -n "$other" ] && [ -f "$(state_file "$other")" ]; then echo "plugin:$other"; return 0; fi
+  if [ -L "$p" ] && [ ! -e "$p" ]; then echo dangling; return 0; fi
+  echo local
+}
+
+# classify_items <skills|agents> <plugin> <update 0|1>: one line "<n> <status> <conflict|->" per
+# declared item, status conflict (its path is taken), skipped (left out by the installed version), new
+# (not in the installed version) or ok.
+classify_items() {
+  local kind="$1" name="$2" update="$3" list n c old_sel="" old_skip=""
+  if [ "$kind" = skills ]; then list="$M_SKILLS"; else list="$M_AGENTS"; fi
+  if [ "$update" = 1 ]; then
+    old_sel="$(state_value "$name" "$kind")"
+    old_skip="$(state_value "$name" "skipped.$kind")"
+  fi
+  for n in $list; do
+    c="$(conflict_kind "$kind" "$n" "$name")"
+    if [ -n "$c" ]; then echo "$n conflict $c"
+    elif [ "$update" = 1 ] && in_list "$n" "$old_skip"; then echo "$n skipped -"
+    elif [ "$update" = 1 ] && ! in_list "$n" "$old_sel"; then echo "$n new -"
+    else echo "$n ok -"
+    fi
   done
-  for n in $M_AGENTS; do
-    p="$ROOT/agents/$n.md"
-    if taken "$p"; then belongs_to "$p" "$name" || fail "$EXIT_CONFLICT" "NAME_CONFLICT agents/$n.md"; fi
+}
+
+# default_selection <classify_items output>: what apply links without --skills / --agents: neither a
+# conflict nor what was left out before.
+default_selection() { printf '%s\n' "$1" | awk '$2 == "ok" || $2 == "new" { printf "%s%s", sep, $1; sep = " " }'; }
+
+csv() { if [ -n "$1" ]; then printf '%s\n' "${1// /,}"; else echo "-"; fi; }
+
+# print_items <skills|agents> <plugin> <update 0|1>: the plan lines of each declared item, then SELECT.
+print_items() {
+  local kind="$1" word lines n st c
+  if [ "$kind" = skills ]; then word=SKILL; else word=AGENT; fi
+  lines="$(classify_items "$kind" "$2" "$3")"
+  while read -r n st c; do
+    case "$st" in
+      ok)       echo "$word $n" ;;
+      new)      echo "NEW_$word $n" ;;
+      skipped)  echo "SKIPPED_$word $n" ;;
+      conflict) echo "CONFLICT $(item_rel "$kind" "$n") $c" ;;
+    esac
+  done <<< "$lines"
+  echo "SELECT $kind $(csv "$(default_selection "$lines")")"
+}
+
+# resolve_selection <plugin> <update 0|1>: what apply links, from --skills / --agents or the plan's
+# defaults, checked against what takes each path now. Sets SEL_SKILLS and SEL_AGENTS (in declared
+# order), SKIP_SKILLS and SKIP_AGENTS (the rest) and REPLACE ("<path> <conflict>" lines). Writes nothing.
+resolve_selection() {
+  local name="$1" update="$2" kind list given lines sel skip n c rel r
+  REPLACE=""
+  for kind in skills agents; do
+    if [ "$kind" = skills ]; then list="$M_SKILLS" given="$ARG_SKILLS"; else list="$M_AGENTS" given="$ARG_AGENTS"; fi
+    lines="$(classify_items "$kind" "$name" "$update")"
+    if [ "$given" = "@default" ]; then given="$(default_selection "$lines")"; fi
+    for n in $given; do in_list "$n" "$list" || die "--$kind: $n is not one of the plugin's $kind (${list:-none})"; done
+    sel="" skip=""
+    for n in $list; do
+      if ! in_list "$n" "$given"; then skip="${skip:+$skip }$n"; continue; fi
+      sel="${sel:+$sel }$n"
+      c="$(printf '%s\n' "$lines" | awk -v n="$n" '$1 == n && $2 == "conflict" { print $3; exit }')"
+      [ -n "$c" ] || continue
+      rel="$(item_rel "$kind" "$n")"
+      in_list "$rel" "$ARG_REPLACE" || fail "$EXIT_CONFLICT" "NAME_CONFLICT $rel"
+      [ "$c" != tracked ] || fail "$EXIT_CONFLICT" "NOT_REPLACEABLE $rel tracked"
+      if [ "$c" = local ] && taken "$PLUGINS/.replaced/$name/$rel"; then
+        fail "$EXIT_CONFLICT" "BACKUP_EXISTS $PLUGINS/.replaced/$name/$rel"
+      fi
+      REPLACE="$REPLACE$rel $c"$'\n'
+    done
+    if [ "$kind" = skills ]; then SEL_SKILLS="$sel" SKIP_SKILLS="$skip"; else SEL_AGENTS="$sel" SKIP_AGENTS="$skip"; fi
   done
+  for r in $ARG_REPLACE; do
+    # shellcheck disable=SC2046
+    set -- $(item_kind_name "$r")
+    if [ "$1" = skills ]; then sel="$SEL_SKILLS"; else sel="$SEL_AGENTS"; fi
+    in_list "$2" "$sel" || die "--replace $r: not a selected skill or agent"
+  done
+}
+
+# state_move <plugin> <skills|agents> <n> <out|in>: take n out of an installed plugin's selection (into
+# its skipped.<kind>, without its Skill rule) or put it back.
+state_move() {
+  local file tmp
+  file="$(state_file "$1")"
+  tmp="$file.tmp"
+  K="$2" N="$3" D="$4" awk '
+    function drop(list, n,   a, i, k, out) {
+      k = split(list, a, " "); out = ""
+      for (i = 1; i <= k; i++) if (a[i] != n) out = out (out == "" ? "" : " ") a[i]
+      return out
+    }
+    function add(list, n,   l) { l = drop(list, n); return l (l == "" ? "" : " ") n }
+    BEGIN { K = ENVIRON["K"]; N = ENVIRON["N"]; D = ENVIRON["D"]; rule = "allow.claude=Skill(" N ")" }
+    index($0, K "=") == 1 { v = substr($0, length(K) + 2); print K "=" (D == "out" ? drop(v, N) : add(v, N)); next }
+    index($0, "skipped." K "=") == 1 {
+      seen = 1; v = substr($0, length(K) + 10)
+      print "skipped." K "=" (D == "out" ? add(v, N) : drop(v, N)); next
+    }
+    $0 == rule { next }
+    { print }
+    END {
+      if (!seen && D == "out") print "skipped." K "=" N
+      if (D == "in" && K == "skills") print rule
+    }' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+# do_replacements <plugin>: move away what takes the paths of REPLACE, so the plugin links there, and
+# add to STATE_REPLACED what remove puts back (a dangling link is just removed).
+do_replacements() {
+  local name="$1" rel c b
+  while read -r rel c; do
+    [ -n "$rel" ] || continue
+    case "$c" in
+      dangling) rm "$ROOT/$rel" ;;
+      local)
+        b="$PLUGINS/.replaced/$name/$rel"
+        mkdir -p "$(dirname "$b")"
+        mv "$ROOT/$rel" "$b"
+        STATE_REPLACED="$STATE_REPLACED$rel $c"$'\n' ;;
+      plugin:*)
+        # shellcheck disable=SC2046
+        state_move "${c#plugin:}" $(item_kind_name "$rel") out
+        rm "$ROOT/$rel"
+        STATE_REPLACED="$STATE_REPLACED$rel $c"$'\n' ;;
+    esac
+  done <<< "$REPLACE"
+}
+
+# restore_replaced <plugin>: put back what the plugin replaced and does not link any more (SEL_SKILLS and
+# SEL_AGENTS; empty on remove), after its links are gone. Sets STATE_REPLACED to the entries still in
+# force. Never overwrites: a path taken since keeps its backup (RESTORE_SKIPPED).
+restore_replaced() {
+  local name="$1" line rel c kind n src
+  STATE_REPLACED=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    rel="${line%% *}" c="${line#* }"
+    # shellcheck disable=SC2046
+    set -- $(item_kind_name "$rel")
+    kind="$1" n="$2"
+    if { [ "$kind" = skills ] && in_list "$n" "$SEL_SKILLS"; } || { [ "$kind" = agents ] && in_list "$n" "$SEL_AGENTS"; }; then
+      STATE_REPLACED="$STATE_REPLACED$line"$'\n'
+      continue
+    fi
+    if taken "$ROOT/$rel"; then echo "RESTORE_SKIPPED $rel taken"; continue; fi
+    case "$c" in
+      local)
+        if ! taken "$PLUGINS/.replaced/$name/$rel"; then echo "RESTORE_SKIPPED $rel missing"; continue; fi
+        mkdir -p "$ROOT/$kind"
+        mv "$PLUGINS/.replaced/$name/$rel" "$ROOT/$rel" ;;
+      plugin:*)
+        if [ "$kind" = skills ]; then src="../plugins/${c#plugin:}/skills/$n"; else src="../plugins/${c#plugin:}/agents/$n.md"; fi
+        if [ ! -f "$(state_file "${c#plugin:}")" ] || [ ! -e "$ROOT/$kind/$src" ]; then
+          echo "RESTORE_SKIPPED $rel missing"; continue
+        fi
+        state_move "${c#plugin:}" "$kind" "$n" in
+        make_link "$src" "$ROOT/$rel" ;;
+      *) continue ;;
+    esac
+    echo "RESTORED $rel"
+  done <<< "$(conf_value "$(state_file "$name")" replaced)"
+  if [ -d "$PLUGINS/.replaced/$name" ]; then
+    find "$PLUGINS/.replaced/$name" -depth -type d -empty -exec rmdir {} \;
+    rmdir "$PLUGINS/.replaced" 2>/dev/null || true
+  fi
 }
 
 # relink <target> <path>: (re)create path as a link to target, relative to the path's directory.
@@ -663,7 +892,6 @@ prepare_add() {
   check_requirements
   if [ -e "$PLUGINS/$M_NAME" ] || [ -L "$PLUGINS/$M_NAME" ]; then fail "$EXIT_EXISTS" "ALREADY_INSTALLED $M_NAME"; fi
   check_provides "" 1
-  check_conflicts "$M_NAME"
 }
 
 # --- catalog: PLUGINS.md -------------------------------------------------------------
@@ -730,14 +958,44 @@ catalog_entry() {
   CAT_REF="$(printf '%s' "$line" | awk -F"$US" '{ print $4 }')"
 }
 
+# parse_list <option> <value>: PARSED = the comma-separated items of the value, space-separated ("-": none).
+parse_list() {
+  local item
+  PARSED=""
+  [ "$2" != "-" ] || return 0
+  case "$2" in ""|,*|*,|*,,*|*[[:space:]]*) die "$1 needs items separated by commas, or -: $2" ;; esac
+  for item in ${2//,/ }; do
+    case "$1" in
+      --replace)
+        case "$item" in skills/*|agents/*.md) ;; *) die "--replace takes skills/<name> or agents/<name>.md: $item" ;; esac
+        is_slug "$(item_kind_name "$item" | awk '{ print $2 }')" || die "--replace: invalid path $item" ;;
+      *) is_slug "$item" || die "$1: invalid name $item" ;;
+    esac
+    PARSED="${PARSED:+$PARSED }$item"
+  done
+}
+
+# parse_selection <option> <value>: one of --skills, --agents, --replace (apply only).
+parse_selection() {
+  parse_list "$1" "$2"
+  case "$1" in
+    --skills)  ARG_SKILLS="$PARSED" ;;
+    --agents)  ARG_AGENTS="$PARSED" ;;
+    --replace) ARG_REPLACE="$PARSED" ;;
+  esac
+  ARG_SEL=1
+}
+
 # parse_add_args <plan|apply> <args>...: a bare name (plan only) is an official plugin of PLUGINS.md.
 parse_add_args() {
   local mode="$1"
   shift
   ARG_URL="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED="" ARG_CATALOG=""
+  ARG_SKILLS="@default" ARG_AGENTS="@default" ARG_REPLACE="" ARG_SEL=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
+      --skills|--agents|--replace) [ $# -ge 2 ] || die "$1 needs a value"; parse_selection "$1" "$2"; shift 2 ;;
       --commit) [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
       --adopted) [ $# -ge 2 ] || die "--adopted needs a value"; ARG_ADOPTED="$2"; shift 2 ;;
       -*)       die "unknown option: $1" ;;
@@ -762,10 +1020,10 @@ parse_add_args() {
 
 cmd_add() {
   parse_add_args plan "$@"
-  [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply add'"
+  [ -z "$ARG_COMMIT$ARG_ADOPTED$ARG_SEL" ] || die "--commit, --adopted, --skills, --agents and --replace belong to 'apply add'"
   prepare_add "$ARG_URL" "$ARG_REF"
   if [ -n "$ARG_CATALOG" ]; then echo "CATALOG $ARG_CATALOG"; fi
-  print_plan "$ADD_COMMIT" "$ARG_URL" "$ADD_REF" "$ADD_KIND" "$ADD_DIR"
+  print_plan "$ADD_COMMIT" "$ARG_URL" "$ADD_REF" "$ADD_KIND" "$ADD_DIR" 0
   fail "$EXIT_CONFIRM" "CONFIRM_ADD $M_NAME $ADD_COMMIT $ADOPTED"
 }
 
@@ -777,9 +1035,12 @@ apply_add() {
   [ "$ARG_COMMIT" = "$ADD_COMMIT" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $ADD_COMMIT"
   # What runs is what the plan showed: install skipped (ADOPT) or not.
   [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
+  resolve_selection "$M_NAME" 0
   local dest="$PLUGINS/$M_NAME"
   mv "$ADD_DIR" "$dest"
-  link_plugin "$M_NAME" "$M_SKILLS" "$M_AGENTS"
+  STATE_REPLACED=""
+  do_replacements "$M_NAME"
+  link_plugin "$M_NAME" "$SEL_SKILLS" "$SEL_AGENTS"
   write_state "$M_NAME" "$ADD_COMMIT" "$ADD_REF" "$ADD_KIND" ok
   refresh_providers
   run_install "$M_NAME" "$dest"
@@ -831,13 +1092,14 @@ prepare_update() {
   # Commands provided since the installed version must not exist yet, like on a first install. A state
   # written before adopt existed has no adopted line: install ran, so it is ours.
   check_provides "$(state_value "$name" provides)" "$(state_value "$name" adopted)"
-  check_conflicts "$name"
 }
 
 parse_name_args() {
   ARG_NAME="" ARG_REF="" ARG_COMMIT="" ARG_ADOPTED="" ARG_FETCH=1 ARG_FORCE=0
+  ARG_SKILLS="@default" ARG_AGENTS="@default" ARG_REPLACE="" ARG_SEL=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --skills|--agents|--replace) [ $# -ge 2 ] || die "$1 needs a value"; parse_selection "$1" "$2"; shift 2 ;;
       --ref)      [ $# -ge 2 ] || die "--ref needs a value"; ARG_REF="$2"; shift 2 ;;
       --commit)   [ $# -ge 2 ] || die "--commit needs a value"; ARG_COMMIT="$2"; shift 2 ;;
       --adopted)  [ $# -ge 2 ] || die "--adopted needs a value"; ARG_ADOPTED="$2"; shift 2 ;;
@@ -856,14 +1118,18 @@ parse_name_args() {
 
 cmd_update() {
   parse_name_args "$@"
-  [ -z "$ARG_COMMIT$ARG_ADOPTED" ] || die "--commit and --adopted belong to 'apply update'"
+  [ -z "$ARG_COMMIT$ARG_ADOPTED$ARG_SEL" ] || die "--commit, --adopted, --skills, --agents and --replace belong to 'apply update'"
   [ "$ARG_FORCE" -eq 0 ] || die "unknown option: --force"
   local name="$ARG_NAME" state rule
   prepare_update "$name" "$ARG_REF" "$ARG_FETCH"
   if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
   state="$(state_file "$name")"
-  print_plan "$UP_TARGET" "" "$UP_REF" "$UP_KIND" "$TMP_DIR/tree"
+  print_plan "$UP_TARGET" "" "$UP_REF" "$UP_KIND" "$TMP_DIR/tree" 1
+  # The Skill rule of a skill left out before is not new: it was offered and declined.
+  local skipped s
+  skipped="$(state_value "$name" skipped.skills)"
   while IFS= read -r rule; do
+    case "$rule" in "Skill("*")") s="${rule#Skill(}"; if in_list "${s%)}" "$skipped"; then continue; fi ;; esac
     if [ -n "$rule" ] && ! conf_value "$state" allow.claude | grep -qxF -- "$rule"; then echo "NEW_ALLOW claude $rule"; fi
   done <<< "$(claude_rules)"
   while IFS= read -r rule; do
@@ -883,10 +1149,13 @@ apply_update() {
   if [ "$UP_NOOP" -eq 1 ]; then return 0; fi
   [ "$ARG_COMMIT" = "$UP_TARGET" ] || fail "$EXIT_MISMATCH" "MISMATCH $ARG_COMMIT $UP_TARGET"
   [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
+  resolve_selection "$name" 1
   # Detached: no local branch is created or reset, so nothing local can be lost.
   git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
   unlink_plugin "$name"
-  link_plugin "$name" "$M_SKILLS" "$M_AGENTS"
+  restore_replaced "$name"
+  do_replacements "$name"
+  link_plugin "$name" "$SEL_SKILLS" "$SEL_AGENTS"
   write_state "$name" "$UP_TARGET" "$UP_REF" "$UP_KIND" ok
   refresh_providers
   run_install "$name" "$UP_DEST"
@@ -898,12 +1167,13 @@ apply_update() {
 
 cmd_remove() {
   parse_name_args "$@"
-  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
+  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED$ARG_SEL" ] && [ "$ARG_FORCE" -eq 0 ] || die "remove takes only a plugin name"
   local name="$ARG_NAME" n uninstall
   [ -d "$PLUGINS/$name" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
   echo "PLUGIN $name $(state_value "$name" version | sed 's/^$/-/') $(state_value "$name" commit | sed 's/^$/-/')"
   for n in $(state_value "$name" skills); do echo "SKILL $n"; done
   for n in $(state_value "$name" agents); do echo "AGENT $n"; done
+  conf_value "$(state_file "$name")" replaced | awk 'NF { print "RESTORE " $0 }'
   uninstall="$(state_value "$name" uninstall)"
   if [ -n "$uninstall" ]; then
     if [ "$(state_value "$name" adopted)" = 1 ]; then echo "UNINSTALL_SKIPPED $uninstall"; else echo "UNINSTALL $uninstall"; fi
@@ -914,7 +1184,7 @@ cmd_remove() {
 
 apply_remove() {
   parse_name_args "$@"
-  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED" ] || die "apply remove takes only --force and a plugin name"
+  [ -z "$ARG_REF$ARG_COMMIT$ARG_ADOPTED$ARG_SEL" ] || die "apply remove takes only --force and a plugin name"
   local name="$ARG_NAME" dest="$PLUGINS/$ARG_NAME" why uninstall
   [ -d "$dest" ] || fail "$EXIT_NOT_INSTALLED" "NOT_INSTALLED $name"
   why="$(dirty_reason "$dest" "$(state_value "$name" commit)")"
@@ -926,6 +1196,8 @@ apply_remove() {
     run_cmd "$dest" "$uninstall" || echo "warning: uninstall failed, removing anyway: $uninstall" >&2
   fi
   unlink_plugin "$name"
+  SEL_SKILLS="" SEL_AGENTS=""
+  restore_replaced "$name"
   rm -rf "$dest"
   rm -f "$(state_file "$name")"
   refresh_providers

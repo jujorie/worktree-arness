@@ -10,19 +10,43 @@ Always through the `plugin-manage` skill. Each change is two steps: a plan that 
 
 | Need | Plan | Then |
 |---|---|---|
-| Install | `plugin-manage add [--ref <tag>] <url|name>` (a name of `PLUGINS.md`, see below): source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> --adopted <0|1> --ref <ref> <url>` (commit and adopted from the plan's `CONFIRM_ADD`, URL and ref from its `SOURCE`, also after `add <name>`): clones into `plugins/<name>`, links skills and agents, records the state, renders the Claude Code rules, runs `install` |
-| Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --adopted <0|1> --ref <ref> <name>` (from `CONFIRM_UPDATE`) |
-| Remove | `plugin-manage remove <name>` | `apply remove <name>`: runs `uninstall`, removes the links, the clone, the state and its rules |
+| Install | `plugin-manage add [--ref <tag>] <url|name>` (a name of `PLUGINS.md`, see below): source and commit, description, requirements, provided commands, skills, agents, permission rules, install and uninstall commands | `apply add --commit <full sha> --adopted <0|1> --ref <ref> [--skills ...] [--agents ...] [--replace ...] <url>` (commit and adopted from the plan's `CONFIRM_ADD`, URL and ref from its `SOURCE`, also after `add <name>`; selection: see *Choosing skills and agents*): clones into `plugins/<name>`, links the selected skills and agents, records the state, renders the Claude Code rules, runs `install` |
+| Update | `plugin-manage update <name>`: the same, plus the rules that are new | `apply update --commit <sha> --adopted <0|1> --ref <ref> [--skills ...] [--agents ...] [--replace ...] <name>` (from `CONFIRM_UPDATE`) |
+| Remove | `plugin-manage remove <name>` | `apply remove <name>`: runs `uninstall`, removes the links, puts back what the plugin replaced, removes the clone, the state and its rules |
 | List | `plugin-manage list` | State `OK`, `BROKEN_LINK`, `MODIFIED`, `INSTALL_FAILED` or `UNMANAGED` |
 | Restore links | `./setup.sh --provider <p>` | Relinks the installed plugins and renders their rules |
 
 **Official plugins.** `PLUGINS.md` at the arness root lists them: public repos with CI, a protected `main` and version tags. `plugin-manage catalog` prints them (`OFFICIAL <name> <url> <ref> <description>`), and `add <name>` plans one by name, with the URL and tag of its row (`--ref` overrides the tag); `apply add` then takes the URL and ref the plan's `SOURCE` showed, never the name. The plugin's manifest must carry that name (`CATALOG_MISMATCH` otherwise). Being official skips no check: the plan and the confirmation are the same as for any URL.
 
+## Choosing skills and agents
+
+You do not have to install every skill and agent of a plugin: the plugin-manage skill asks which ones, and `apply` takes the answer as `--skills a,b` and `--agents c` (`-` for none). The plan marks each one:
+
+| Plan line | Meaning | Selected by default |
+|---|---|---|
+| `SKILL <n>` / `AGENT <n>` | Free, or already this plugin's | yes |
+| `NEW_SKILL <n>` / `NEW_AGENT <n>` | Update: new in this version | yes |
+| `SKIPPED_SKILL <n>` / `SKIPPED_AGENT <n>` | Update: left out at install or at the last update | no |
+| `CONFLICT <path> <what>` | The name is taken by something that is not this plugin's | no |
+
+`SELECT skills <a,b|->` and `SELECT agents <a,b|->` print the default, which `apply` takes when `--skills` or `--agents` is not given. A selected name that is taken needs its path in `--replace` (`--replace skills/my-init,agents/my-reviewer.md`), or `apply` stops with `NAME_CONFLICT` and writes nothing. Replacing never deletes anything:
+
+| What takes the name | Replacing it | When the plugin is removed, or stops linking it |
+|---|---|---|
+| `tracked`: a skill or agent of arness itself | refused (`NOT_REPLACEABLE`) | |
+| `local`: a private skill, a file, a link elsewhere | moves it to `plugins/.replaced/<plugin>/` (`BACKUP_EXISTS` when that path is taken) | moved back |
+| `plugin:<other>`: another installed plugin's link | takes it out of that plugin's selection (its state lists it in `skipped.skills`) | given back to that plugin |
+| `dangling`: a broken link | removes it | nothing to put back |
+
+Nothing is put back over a path that is taken again: `apply` prints `RESTORE_SKIPPED <path> taken` and a local backup stays in `plugins/.replaced/<plugin>/`. Otherwise it prints `RESTORED <path>`.
+
+The state keeps the choice (`skills=` and `agents=` are the selection, `skipped.skills=` and `skipped.agents=` the rest, `replaced=` what was replaced), so `update`, `sync`, `list` and the rendered rules follow it: a skill left out gets no link and no `Skill(<n>)` rule, an update keeps it out (`SKIPPED_SKILL`) and offers only what is new (`NEW_SKILL`). `list` counts skills and agents as linked/selected. A skill that needs another one of its plugin breaks when that one is left out: the plugin's README says which go together.
+
 A plugin installed at a tag (`--ref v1.2.0`) updates to the newest stable version tag (`[v]MAJOR.MINOR.PATCH`; a pre-release only with an explicit `--ref`); one installed at a branch follows that branch.
 
 ## What is trusted
 
-`apply` writes `plugins/.<name>.state` from the manifest it has just validated: commit, ref, version, skills, agents, uninstall command and permission rules. Rendering the settings, `sync`, `list` and `remove` read only that file, never the clone as it is now. So editing the clone or running `git pull` in it grants nothing: `list` reports it as `MODIFIED`, and `update` refuses it until it is removed or the change is undone.
+`apply` writes `plugins/.<name>.state` from the manifest it has just validated: commit, ref, version, the selected skills and agents and the ones left out, what was replaced, uninstall command and permission rules. Rendering the settings, `sync`, `list` and `remove` read only that file, never the clone as it is now. So editing the clone or running `git pull` in it grants nothing: `list` reports it as `MODIFIED`, and `update` refuses it until it is removed or the change is undone.
 
 ## Plugin format
 
