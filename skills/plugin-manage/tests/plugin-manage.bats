@@ -1095,6 +1095,46 @@ check_with() {
   [ "$status" -eq 0 ]
 }
 
+# crlf_files <dir>: the files under <dir> that hold a CR, the .git folder left out. Not grep: the Git for
+# Windows grep drops the CR of a CRLF before it matches.
+crlf_files() {
+  local f
+  find "$1" -path "$1/.git" -prune -o -type f -print | while IFS= read -r f; do
+    if [ "$(LC_ALL=C tr -d '\r' < "$f" | wc -c)" -ne "$(wc -c < "$f")" ]; then printf '%s\n' "$f"; fi
+  done
+}
+
+@test "with core.autocrlf=true, add, apply add and update check the plugin out with LF" {
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ]
+  [ "$(last_line)" = "CONFIRM_ADD demo $(origin_head) 0" ]
+  add_demo --agents -   # no file links: the line endings are what is tested
+  [ -z "$(crlf_files "$SANDBOX/plugins/demo")" ]
+  # newer mtimes make git status compare the contents, with core.autocrlf=true, not only the stat
+  find "$SANDBOX/plugins/demo" -path "$SANDBOX/plugins/demo/.git" -prune -o -type f -exec touch {} +
+  run "$SCRIPT" list
+  [[ "$output" == "INSTALLED demo "*" OK "* ]] || false
+  edit_conf 's/^version=.*/version=0.2.0/'
+  commit_origin "c2"
+  run "$SCRIPT" update demo
+  [ "$status" -eq 20 ]
+  run "$SCRIPT" apply update --commit "$(origin_head)" --adopted 0 --ref main demo
+  [ "$status" -eq 0 ]
+  [ -z "$(crlf_files "$SANDBOX/plugins/demo")" ]
+}
+
+@test "a plugin with * text=auto gets LF with core.eol=crlf, and its own eol attributes still apply" {
+  printf '* text=auto\n*.cmd text eol=crlf\n' > "$ORIGIN/.gitattributes"
+  printf 'echo hello\n' > "$ORIGIN/skills/demo-hello/scripts/hello.cmd"
+  commit_origin "c2"
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.eol GIT_CONFIG_VALUE_0=crlf
+  run "$SCRIPT" add "$URL"
+  [ "$status" -eq 20 ]
+  add_demo --agents -   # no file links: the line endings are what is tested
+  [ "$(crlf_files "$SANDBOX/plugins/demo")" = "$SANDBOX/plugins/demo/skills/demo-hello/scripts/hello.cmd" ]
+}
+
 @test "a git pull in the clone grants nothing: rules come from the state, list says MODIFIED" {
   bash "$SANDBOX/setup.sh" --provider claude >/dev/null
   add_demo

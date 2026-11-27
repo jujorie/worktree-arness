@@ -61,7 +61,7 @@ my-plugin/
 └── ...                                 its own code, tests and CI
 ```
 
-`arness-plugin.conf` is one `KEY=value` per line, like `.env`; `#` starts a comment. Unknown keys and repeated single keys are errors.
+`arness-plugin.conf` is one `KEY=value` per line, like `.env`; `#` starts a comment. Unknown keys and repeated single keys are errors, and so is a `KEY=value` line that ends in CRLF. Commit the file with LF line endings. `plugin-manage` checks a plugin out without turning LF into CRLF, whatever `core.autocrlf` and `core.eol` say; Git for Windows turns it by default. Only `eol` attributes in the plugin's own `.gitattributes` still apply, so do not give `arness-plugin.conf` an `eol=crlf`.
 
 ```
 name=my-plugin

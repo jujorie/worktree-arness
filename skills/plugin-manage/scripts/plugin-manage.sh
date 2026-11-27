@@ -896,12 +896,19 @@ newest_tag() {
   git -C "$1" tag --list --sort=-v:refname | awk '/^v?[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }'
 }
 
+# git_lf <args>: git for the commands that write a plugin's files (checkout, checkout-index), with LF
+# line endings whatever the user's core.autocrlf and core.eol. Otherwise Git for Windows (core.eol native)
+# or core.autocrlf=true writes CRLF: the manifest is refused (BAD_MANIFEST ... CRLF line ending) and the
+# plugin's scripts do not run. core.eol alone is not enough: core.autocrlf=true overrides it. The plugin's
+# own eol attributes still apply.
+git_lf() { git -c core.autocrlf=false -c core.eol=lf "$@"; }
+
 # export_tree <dir> <commit> <out>: the commit's files as checkout writes them (a private index;
 # unlike git archive, export-ignore and export-subst do not apply), without touching the clone.
 export_tree() {
   mkdir -p "$3"
   GIT_INDEX_FILE="$TMP_DIR/index" git -C "$1" read-tree "$2"
-  GIT_INDEX_FILE="$TMP_DIR/index" git -C "$1" --work-tree="$3" checkout-index -a -f
+  GIT_INDEX_FILE="$TMP_DIR/index" git_lf -C "$1" --work-tree="$3" checkout-index -a -f
 }
 
 # --- add -----------------------------------------------------------------------------
@@ -918,7 +925,7 @@ prepare_add() {
   resolved="${resolved#* }"
   ADD_REF="${resolved% *}"
   ADD_KIND="${resolved##* }"
-  git -C "$ADD_DIR" checkout --quiet --detach "$ADD_COMMIT" >&2
+  git_lf -C "$ADD_DIR" checkout --quiet --detach "$ADD_COMMIT" >&2
   validate_plugin "$ADD_DIR"
   if [ -n "${ARG_CATALOG:-}" ] && [ "$M_NAME" != "$ARG_CATALOG" ]; then
     fail "$EXIT_INVALID" "CATALOG_MISMATCH $ARG_CATALOG $M_NAME"
@@ -1204,7 +1211,7 @@ apply_update() {
   [ "$ARG_ADOPTED" = "$ADOPTED" ] || fail "$EXIT_MISMATCH" "ADOPTION_CHANGED $ARG_ADOPTED $ADOPTED"
   resolve_selection "$name" 1
   # Detached: no local branch is created or reset, so nothing local can be lost.
-  git -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
+  git_lf -C "$UP_DEST" checkout --quiet --detach "$UP_TARGET" >&2
   unlink_plugin "$name"
   restore_replaced "$name"
   record_replacements
